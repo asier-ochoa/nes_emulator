@@ -1,6 +1,7 @@
 const std = @import("std");
 const CPU = @import("6502.zig");
-const Bus = @import("bus.zig").Bus;
+const Bus = @import("bus.zig");
+const util = @import("util.zig");
 
 fn readTest(comptime address: u16, bus: anytype) !void {
     std.debug.print(
@@ -14,7 +15,6 @@ pub const std_options = std.Options {
 };
 
 pub fn main() !void {
-
     // Set up CPU
     const NesMemoryMap = struct {
         @"0000-AFFF": [0xb000]u8,
@@ -26,9 +26,9 @@ pub fn main() !void {
                 std.debug.print("I have been called to write on address 0x{X:0<4} with value {}\n", .{address, data});
             }
         },
-        @"FFFE-FFFF": [0x0002]u8,
+        @"FFFC-FFFF": [0x0004]u8,
     };
-    var bus = Bus(NesMemoryMap).init();
+    var bus = Bus.Bus(NesMemoryMap).init();
     var cpu = CPU.CPU(@TypeOf(bus)).init(&bus);
     cpu.status_register = 0b00010011;
 
@@ -65,4 +65,63 @@ pub fn main() !void {
         if (i == 5) std.debug.print("PC after reading low order reset vector: 0x{X:0>4}\n", .{cpu.program_counter});
     }
     std.debug.print("PC after reset: 0x{X:0>4}\n", .{cpu.program_counter});
+}
+
+test "Bus Array Write" {
+    var bus = util.TestBus.init();
+    try bus.cpuWrite(0x0000, 0x42);
+    try bus.cpuWrite(0x0002, 0x61);
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x42, 0, 0x61}, bus.memory_map.@"0000-EFFF"[0..3]);
+}
+
+test "Bus Array Write Unmapped Error" {
+    var bus = util.TestBus.init();
+    try std.testing.expectError(Bus.BusError.UnmappedWrite, bus.cpuWrite(0xf000, 0));
+}
+
+test "Bus Array Read" {
+    var bus = util.TestBus.init();
+    @memcpy(bus.memory_map.@"0000-EFFF"[0..3], &[_]u8{0x01, 0x20, 0});
+    try std.testing.expectEqual(0x01, try bus.cpuRead(0x0000));
+    try std.testing.expectEqual(0x20, try bus.cpuRead(0x0001));
+    try std.testing.expectEqual(0, try bus.cpuRead(0x0003));
+}
+
+test "Bus Array Read Unmapped Error" {
+    var bus = util.TestBus.init();
+    try std.testing.expectError(Bus.BusError.UnmappedRead, bus.cpuRead(0xf000));
+}
+
+test "CPU LDAabs" {
+    var bus = util.TestBus.init();
+    var cpu = util.TestCPU.init(&bus);
+    cpu.program_counter = 0x0000;
+    // Write instruction
+    @memcpy(bus.memory_map.@"0000-EFFF"[0..3], &[_]u8{CPU.instr.LDAabs, 0x00, 0x02});
+    // Write value to be loaded
+    try bus.cpuWrite(0x0200, 0x64);
+    // Execute instruction
+    for (0..4) |i| {
+        try cpu.tick();
+
+        // Verify state of cpu at each step
+        switch (i) {
+            0 => try std.testing.expectEqual(util.TestCPU {
+                .instruction_register = CPU.instr.LDAabs,
+                .program_counter = 0x0001,
+                .bus = &bus
+            }, cpu),
+            1 => try std.testing.expectEqual(util.TestCPU {
+
+            }, cpu),
+            3 => try std.testing.expectEqual(util.TestCPU {
+                .a_register = 0x64,
+                .instruction_register = CPU.instr.LDAabs,
+                .program_counter = 0x0003,
+                .data_latch = 0x0200,
+                .bus = &bus
+            }, cpu),
+            else => {}
+        }
+    }
 }
