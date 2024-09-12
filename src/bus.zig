@@ -68,6 +68,7 @@ pub fn Bus(SuppliedMMap: type) type {
         // - Upper bound > lower bound
         // - All declarations must be struct type and have one "onRead" and one "onWrite" method
         // - Arrays must represent their bound's size
+        // - Array's child type must be u8
         fn CheckedMemoryMap(T: type) type {
             comptime {
                 for (@typeInfo(T).Struct.fields) |field| {
@@ -92,10 +93,16 @@ pub fn Bus(SuppliedMMap: type) type {
                             " with the signatures \"fn (u16, u8) void\" and \"fn (u16) u8\""
                         ),
                         // Check array is properly sized
-                        .Array => |mem_array| if (bounds.upper - bounds.lower + 1 != mem_array.len) @compileError(
+                        .Array => |mem_array| {
+                            if (bounds.upper - bounds.lower + 1 != mem_array.len) @compileError(
                             "Memory region \"" ++ field.name ++ "\"'s size doesn't correspond to type's size, " ++
-                            "correct size is " ++ std.fmt.comptimePrint("0x{X:0>4}", .{bounds.upper - bounds.lower + 1})
-                        ),
+                                "correct size is " ++ std.fmt.comptimePrint("0x{X:0>4}", .{bounds.upper - bounds.lower + 1})
+                            );
+                            // Check child type is u8
+                            if (mem_array.child != u8) @compileError(
+                                "Memory region \"" ++ field.name ++ "\"'s array child type must be u8"
+                            );
+                        },
                         else => @compileError("Invalid type for memory region \"" ++ field.name ++ "\", must be a struct or array")
                     }
                 }
