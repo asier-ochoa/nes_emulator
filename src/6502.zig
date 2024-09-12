@@ -11,22 +11,24 @@ pub const logger = std.log.scoped(.CPU);
 pub fn CPU(Bus: type) type {
     return struct {
         const Self = @This();
+        const instruction_cycle_reset = -1;
 
         // CPU programming registers
         a_register: u8 = 0,
         x_register: u8 = 0,
         y_register: u8 = 0,
-        program_counter: u16 = 0,
-        stack_pointer: u8 = 0,
         status_register: u8 = 0,
 
         // Internal physical state
         instruction_register: u8 = 0,
+        stack_pointer: u8 = 0,
+        program_counter: u16 = 0,
 
         // Internal logical state
-        current_instruction_cycle: u32 = 0, // Starts at 0, starts at instruction fetch cycle
-        reset_vector: u16 = 0, // Used only while reset process is happening
+        current_instruction_cycle: i32 = 0, // Starts at 0, starts at instruction fetch cycle
         is_reseting: bool = false, // Used to track when in reset procedure, needed to do things like skip 2 clock cycles on reset
+        addressing_mode: AddressingMode = .None,
+        data_latch: u16 = 0, // Represents the two internal data latches the 6502 uses to store half addresses when fetching instructions
 
         // Bus connection
         bus: *Bus,
@@ -43,7 +45,7 @@ pub fn CPU(Bus: type) type {
             } else {
                 switch (self.current_instruction_cycle) {
                     0 => self.fetchInstruction(),
-                    else => return CPUError.IllegalClockState
+                    else => self.processInstruction()
                 }
             }
             self.current_instruction_cycle += 1;
@@ -57,6 +59,7 @@ pub fn CPU(Bus: type) type {
             self.current_instruction_cycle = 1;
         }
 
+        // TODO: Rewrite such that it is consistent with real 6502 behaviour, specifically the ricoh model
         fn resetTick(self: *Self) CPUError!void {
             switch (self.current_instruction_cycle) {
                 // Common t1 through t4 operations for all interrupt routines
@@ -68,12 +71,49 @@ pub fn CPU(Bus: type) type {
                     self.is_reseting = false;
                     self.current_instruction_cycle = 0;
                 },
-                else => return CPUError.IllegalClockState
+                else => return CPUError.IllegalClockState //TODO: log illegal clock cycles
             }
         }
 
         fn fetchInstruction(self: *Self) void {
             self.instruction_register = self.safeBusRead(self.program_counter);
+            self.program_counter += 1;
+        }
+
+        // Master list of all instructions
+        // Big switch case that uses the instruction + the current cycle to determine what to do.
+        // ATTENTION: In order to reset the current instruction cycle, set it to
+        fn processInstruction(self: *Self) void {
+            switch (self.current_instruction_cycle) {
+                1 => {
+                    switch (self.instruction_register) {
+                        instr.LDAabs => {
+                            self.data_latch = self.safeBusRead(self.program_counter);
+                            self.program_counter += 1;
+                        },
+                        else => {} //TODO: log illegal instructions
+                    }
+                },
+                2 => {
+                    switch (self.instruction_register) {
+                        instr.LDAabs => {
+                            self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
+                            self.program_counter += 1;
+                        },
+                        else => {}
+                    }
+                },
+                3 => {
+                    switch (self.instruction_register) {
+                        instr.LDAabs => {
+                            self.a_register = self.safeBusRead(self.data_latch);
+                            self.current_instruction_cycle = instruction_cycle_reset;
+                        },
+                        else => {}
+                    }
+                },
+                else => {}
+            }
         }
 
         pub inline fn isFlagSet(self: Self, flag: StatusFlag) bool {
@@ -82,7 +122,7 @@ pub fn CPU(Bus: type) type {
 
         inline fn safeBusRead(self: Self, address: u16) u8 {
             return self.bus.cpuRead(address) catch blk: {
-                logger.warn("Unmapped read from address 0x{X:0>4}\n", .{address});
+                logger.warn("Unmapped read from address 0x{X:0>4}, returning 0\n", .{address});
                 break :blk 0;
             };
         }
@@ -95,7 +135,27 @@ pub fn CPU(Bus: type) type {
     };
 }
 
-pub const reset_vector_low_order: u16 = 0xfffe;
+pub const reset_vector_low_order: u16 = 0xfffc;
+
+// Instruction pneumonics
+pub const instr = struct {
+    pub const LDAabs = 0xAD;
+};
+
+pub const AddressingMode = enum {
+    None, // Denotes no current addressing, reset after instruction ends
+    Implied,
+    Immediate,
+    Absolute,
+    ZeroPage,
+    IndexedAbsoluteX,
+    IndexedAbsoluteY,
+    IndexedZeroPageX,
+    IndexedZeroPageY,
+    Indirect,
+    PreIndexedIndirectZeroPageX,
+    PostIndexedIndirectZeroPageY
+};
 
 pub const StatusFlag = enum(u8) {
     carry = 1,
@@ -109,4 +169,5 @@ pub const StatusFlag = enum(u8) {
 
 pub const CPUError = error {
     IllegalClockState, // When the cpu reaches a "current_instruction_cycle" that doesn't represent any possible state
+    IllegalInstruction,
 };
