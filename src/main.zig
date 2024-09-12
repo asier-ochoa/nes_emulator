@@ -101,27 +101,30 @@ test "CPU LDAabs" {
     // Write value to be loaded
     try bus.cpuWrite(0x0200, 0x64);
     // Execute instruction
-    for (0..4) |i| {
+    for (0..4) |_| {
         try cpu.tick();
-
-        // Verify state of cpu at each step
-        switch (i) {
-            0 => try std.testing.expectEqual(util.TestCPU {
-                .instruction_register = CPU.instr.LDAabs,
-                .program_counter = 0x0001,
-                .bus = &bus
-            }, cpu),
-            1 => try std.testing.expectEqual(util.TestCPU {
-
-            }, cpu),
-            3 => try std.testing.expectEqual(util.TestCPU {
-                .a_register = 0x64,
-                .instruction_register = CPU.instr.LDAabs,
-                .program_counter = 0x0003,
-                .data_latch = 0x0200,
-                .bus = &bus
-            }, cpu),
-            else => {}
-        }
     }
+    try std.testing.expectEqual(util.TestCPU {
+        .a_register = 0x64,
+        .instruction_register = CPU.instr.LDAabs,
+        .program_counter = 0x0003,
+        .data_latch = 0x0200,
+        .bus = &bus
+    }, cpu);
+}
+
+test "CPU STAabs" {
+    var bus = util.TestBus.init();
+    var cpu = util.TestCPU.init(&bus);
+    cpu.program_counter = 0x0000;
+    cpu.a_register = 0x64;
+    // Write instruction
+    @memcpy(bus.memory_map.@"0000-EFFF"[0..3], &[_]u8{CPU.instr.STAabs, 0x00, 0x02});
+    // Write value to be loaded
+    try bus.cpuWrite(0x0200, 0x64);
+    // Execute instruction
+    for (0..4) |_| {
+        try cpu.tick();
+    }
+    try std.testing.expectEqual(0x64, bus.memory_map.@"0000-EFFF"[0x0200]);
 }

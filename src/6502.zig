@@ -87,7 +87,7 @@ pub fn CPU(Bus: type) type {
             switch (self.current_instruction_cycle) {
                 1 => {
                     switch (self.instruction_register) {
-                        instr.LDAabs => {
+                        instr.LDAabs, instr.STAabs => {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
                         },
@@ -96,7 +96,7 @@ pub fn CPU(Bus: type) type {
                 },
                 2 => {
                     switch (self.instruction_register) {
-                        instr.LDAabs => {
+                        instr.LDAabs, instr.STAabs => {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter += 1;
                         },
@@ -107,6 +107,10 @@ pub fn CPU(Bus: type) type {
                     switch (self.instruction_register) {
                         instr.LDAabs => {
                             self.a_register = self.safeBusRead(self.data_latch);
+                            self.current_instruction_cycle = instruction_cycle_reset;
+                        },
+                        instr.STAabs => {
+                            self.safeBusWrite(self.data_latch, self.a_register);
                             self.current_instruction_cycle = instruction_cycle_reset;
                         },
                         else => {}
@@ -127,8 +131,8 @@ pub fn CPU(Bus: type) type {
             };
         }
 
-        inline fn safeBusWrite(self: *Self, address: u16, data: u8) u8 {
-            return self.bus.cpuWrite(address, data) catch {
+        inline fn safeBusWrite(self: *Self, address: u16, data: u8) void {
+            self.bus.cpuWrite(address, data) catch {
                 logger.warn("Unmapped write to address 0x{X:0>4} with value 0x{X:0>2}\n", .{address, data});
             };
         }
@@ -140,6 +144,7 @@ pub const reset_vector_low_order: u16 = 0xfffc;
 // Instruction pneumonics
 pub const instr = struct {
     pub const LDAabs = 0xAD;
+    pub const STAabs = 0x8D;
 };
 
 pub const AddressingMode = enum {
