@@ -93,6 +93,12 @@ pub fn CPU(Bus: type) type {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
                         },
+                        instr.LDAimm => {
+                            self.a_register = self.safeBusRead(self.program_counter);
+                            if (self.a_register == 0) self.setFlag(.zero);
+                            if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
+                            self.endInstruction();
+                        },
                         else => {} //TODO: log illegal instructions
                     }
                 },
@@ -106,7 +112,7 @@ pub fn CPU(Bus: type) type {
                             self.a_register = self.safeBusRead(self.data_latch);
                             if (self.a_register == 0) self.setFlag(.zero);
                             if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
-                            self.current_instruction_cycle = instruction_cycle_reset;
+                            self.endInstruction();
                         },
                         else => {}
                     }
@@ -117,17 +123,17 @@ pub fn CPU(Bus: type) type {
                             self.a_register = self.safeBusRead(self.data_latch);
                             if (self.a_register == 0) self.setFlag(.zero);
                             if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
-                            self.current_instruction_cycle = instruction_cycle_reset;
+                            self.endInstruction();
                         },
                         instr.LDXabs => {
                             self.x_register = self.safeBusRead(self.data_latch);
                             if (self.x_register == 0) self.setFlag(.zero);
                             if (self.x_register & 0b10000000 != 0) self.setFlag(.negative);
-                            self.current_instruction_cycle = instruction_cycle_reset;
+                            self.endInstruction();
                         },
                         instr.STAabs => {
                             self.safeBusWrite(self.data_latch, self.a_register);
-                            self.current_instruction_cycle = instruction_cycle_reset;
+                            self.endInstruction();
                         },
                         else => {}
                     }
@@ -142,6 +148,11 @@ pub fn CPU(Bus: type) type {
 
         pub inline fn setFlag(self: *Self, flag: StatusFlag) void {
             self.status_register |= @intFromEnum(flag);
+        }
+
+        // Declares current cycle to be the end of the current instruction
+        inline fn endInstruction(self: *Self) void {
+            self.current_instruction_cycle = instruction_cycle_reset;
         }
 
         inline fn safeBusRead(self: Self, address: u16) u8 {
@@ -166,6 +177,7 @@ pub const instr = struct {
     pub const LDAabs = 0xAD;
     pub const LDAzpg = 0xA5;
     pub const LDXabs = 0xAE;
+    pub const LDAimm = 0xA9;
     pub const STAabs = 0x8D;
 };
 
@@ -270,6 +282,24 @@ test "LDXabs" {
         .instruction_register = instr.LDXabs,
         .program_counter = 0x0003,
         .data_latch = 0x0200,
+        .bus = &bus,
+        .status_register = @intFromEnum(StatusFlag.negative)
+    }, cpu);
+}
+
+test "LDAimm" {
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &[_]u8{instr.LDAimm, 0xD8}
+    );
+    for (0..2) |_| {
+        try cpu.tick();
+    }
+    try std.testing.expectEqual(util.TestCPU {
+        .a_register = 0xD8,
+        .instruction_register = instr.LDAimm,
+        .program_counter = 0x0001,
         .bus = &bus,
         .status_register = @intFromEnum(StatusFlag.negative)
     }, cpu);
