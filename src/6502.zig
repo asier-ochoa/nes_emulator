@@ -88,7 +88,7 @@ pub fn CPU(Bus: type) type {
                 1 => {
                     switch (self.instruction_register) {
                         // Read low byte of address for execution on memory data
-                        instr.LDAabs, instr.LDAzpg, instr.STAabs => {
+                        instr.LDAabs, instr.LDAzpg, instr.STAabs, instr.LDXabs => {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
                         },
@@ -97,7 +97,7 @@ pub fn CPU(Bus: type) type {
                 },
                 2 => {
                     switch (self.instruction_register) {
-                        instr.LDAabs, instr.STAabs => {
+                        instr.LDAabs, instr.STAabs, instr.LDXabs => {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter += 1;
                         },
@@ -116,6 +116,12 @@ pub fn CPU(Bus: type) type {
                             self.a_register = self.safeBusRead(self.data_latch);
                             if (self.a_register == 0) self.setFlag(.zero);
                             if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
+                            self.current_instruction_cycle = instruction_cycle_reset;
+                        },
+                        instr.LDXabs => {
+                            self.x_register = self.safeBusRead(self.data_latch);
+                            if (self.x_register == 0) self.setFlag(.zero);
+                            if (self.x_register & 0b10000000 != 0) self.setFlag(.negative);
                             self.current_instruction_cycle = instruction_cycle_reset;
                         },
                         instr.STAabs => {
@@ -158,6 +164,7 @@ pub const reset_vector_low_order: u16 = 0xfffc;
 pub const instr = struct {
     pub const LDAabs = 0xAD;
     pub const LDAzpg = 0xA5;
+    pub const LDXabs = 0xAE;
     pub const STAabs = 0x8D;
 };
 

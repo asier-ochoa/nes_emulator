@@ -146,3 +146,24 @@ test "CPU LDAzpg" {
         .status_register = @intFromEnum(CPU.StatusFlag.negative)
     }, cpu);
 }
+
+// TODO: add zero bit status register test
+test "CPU LDXabs" {
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &([_]u8{CPU.instr.LDXabs, 0x00, 0x02} ++ [_]u8{0} ** 0x01fd ++ [_]u8{0xF4})
+    );
+    // Execute instruction
+    for (0..4) |_| {
+        try cpu.tick();
+    }
+    try std.testing.expectEqual(util.TestCPU {
+        .x_register = 0xF4,
+        .instruction_register = CPU.instr.LDXabs,
+        .program_counter = 0x0003,
+        .data_latch = 0x0200,
+        .bus = &bus,
+        .status_register = @intFromEnum(CPU.StatusFlag.negative)
+    }, cpu);
+}
