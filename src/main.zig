@@ -92,22 +92,24 @@ test "Bus Array Read Unmapped Error" {
     try std.testing.expectError(Bus.BusError.UnmappedRead, bus.cpuRead(0xf000));
 }
 
+// TODO: add zero bit status register test
 test "CPU LDAabs" {
     var bus: util.TestBus = undefined;
     var cpu: util.TestCPU = undefined;
     try util.initCPUForTest(&cpu, &bus,
-        &([_]u8{CPU.instr.LDAabs, 0x00, 0x02} ++ [_]u8{0} ** 0x01fd ++ [_]u8{0x64})
+        &([_]u8{CPU.instr.LDAabs, 0x00, 0x02} ++ [_]u8{0} ** 0x01fd ++ [_]u8{0xF4})
     );
     // Execute instruction
     for (0..4) |_| {
         try cpu.tick();
     }
     try std.testing.expectEqual(util.TestCPU {
-        .a_register = 0x64,
+        .a_register = 0xF4,
         .instruction_register = CPU.instr.LDAabs,
         .program_counter = 0x0003,
         .data_latch = 0x0200,
-        .bus = &bus
+        .bus = &bus,
+        .status_register = @intFromEnum(CPU.StatusFlag.negative)
     }, cpu);
 }
 
@@ -125,20 +127,22 @@ test "CPU STAabs" {
     try std.testing.expectEqual(0x64, bus.memory_map.@"0000-EFFF"[0x0200]);
 }
 
+// TODO: add zero bit status register test
 test "CPU LDAzpg" {
     var bus: util.TestBus = undefined;
     var cpu: util.TestCPU = undefined;
     try util.initCPUForTest(&cpu, &bus,
-        &([_]u8{CPU.instr.LDAzpg, 0xFE} ++ [_]u8{0} ** 0xFC ++ [_]u8{0x64})
+        &([_]u8{CPU.instr.LDAzpg, 0xFE} ++ [_]u8{0} ** 0xFC ++ [_]u8{0xF4})
     );
     for (0..3) |_| {
         try cpu.tick();
     }
     try std.testing.expectEqual(util.TestCPU {
-        .a_register = 0x64,
+        .a_register = 0xF4,
         .instruction_register = CPU.instr.LDAzpg,
         .program_counter = 0x0002,
         .data_latch = 0x00fe,
-        .bus = &bus
+        .bus = &bus,
+        .status_register = @intFromEnum(CPU.StatusFlag.negative)
     }, cpu);
 }

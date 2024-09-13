@@ -103,6 +103,8 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.LDAzpg => {
                             self.a_register = self.safeBusRead(self.data_latch);
+                            if (self.a_register == 0) self.setFlag(.zero);
+                            if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
                             self.current_instruction_cycle = instruction_cycle_reset;
                         },
                         else => {}
@@ -112,6 +114,8 @@ pub fn CPU(Bus: type) type {
                     switch (self.instruction_register) {
                         instr.LDAabs => {
                             self.a_register = self.safeBusRead(self.data_latch);
+                            if (self.a_register == 0) self.setFlag(.zero);
+                            if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
                             self.current_instruction_cycle = instruction_cycle_reset;
                         },
                         instr.STAabs => {
@@ -127,6 +131,10 @@ pub fn CPU(Bus: type) type {
 
         pub inline fn isFlagSet(self: Self, flag: StatusFlag) bool {
             return self.status_register & @intFromEnum(flag) != 0;
+        }
+
+        pub inline fn setFlag(self: *Self, flag: StatusFlag) void {
+            self.status_register |= @intFromEnum(flag);
         }
 
         inline fn safeBusRead(self: Self, address: u16) u8 {
