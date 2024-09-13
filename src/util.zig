@@ -10,3 +10,17 @@ pub const TestBus = Bus.Bus(struct {
 });
 
 pub const TestCPU = CPU.CPU(TestBus);
+
+// Initializes a cpu and a bus with PC at 0 and first couple of addresses filled
+pub fn initCPUForTest(cpu: *TestCPU, bus: *TestBus, memory: []const u8) TestError!void {
+    cpu.* = TestCPU.init(bus);
+    bus.* = TestBus.init();
+    if (memory.len > 0) {
+        if (memory.len > bus.memory_map.@"0000-EFFF".len) return TestError.ProvidedMemoryTooLarge
+        else @memcpy(bus.memory_map.@"0000-EFFF"[0..memory.len], memory);
+    }
+}
+
+const TestError = error {
+    ProvidedMemoryTooLarge
+};
