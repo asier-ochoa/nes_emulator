@@ -124,3 +124,21 @@ test "CPU STAabs" {
     }
     try std.testing.expectEqual(0x64, bus.memory_map.@"0000-EFFF"[0x0200]);
 }
+
+test "CPU LDAzpg" {
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &([_]u8{CPU.instr.LDAzpg, 0xFE} ++ [_]u8{0} ** 0xFC ++ [_]u8{0x64})
+    );
+    for (0..3) |_| {
+        try cpu.tick();
+    }
+    try std.testing.expectEqual(util.TestCPU {
+        .a_register = 0x64,
+        .instruction_register = CPU.instr.LDAzpg,
+        .program_counter = 0x0002,
+        .data_latch = 0x00fe,
+        .bus = &bus
+    }, cpu);
+}
