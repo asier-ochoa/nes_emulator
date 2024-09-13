@@ -94,9 +94,7 @@ pub fn CPU(Bus: type) type {
                             self.program_counter += 1;
                         },
                         instr.LDAimm => {
-                            self.a_register = self.safeBusRead(self.program_counter);
-                            if (self.a_register == 0) self.setFlag(.zero);
-                            if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
+                            self.loadRegister(.A, self.program_counter);
                             self.endInstruction();
                         },
                         else => {} //TODO: log illegal instructions
@@ -109,9 +107,7 @@ pub fn CPU(Bus: type) type {
                             self.program_counter += 1;
                         },
                         instr.LDAzpg => {
-                            self.a_register = self.safeBusRead(self.data_latch);
-                            if (self.a_register == 0) self.setFlag(.zero);
-                            if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
+                            self.loadRegister(.A, self.data_latch);
                             self.endInstruction();
                         },
                         else => {}
@@ -120,15 +116,11 @@ pub fn CPU(Bus: type) type {
                 3 => {
                     switch (self.instruction_register) {
                         instr.LDAabs => {
-                            self.a_register = self.safeBusRead(self.data_latch);
-                            if (self.a_register == 0) self.setFlag(.zero);
-                            if (self.a_register & 0b10000000 != 0) self.setFlag(.negative);
+                            self.loadRegister(.A, self.data_latch);
                             self.endInstruction();
                         },
                         instr.LDXabs => {
-                            self.x_register = self.safeBusRead(self.data_latch);
-                            if (self.x_register == 0) self.setFlag(.zero);
-                            if (self.x_register & 0b10000000 != 0) self.setFlag(.negative);
+                            self.loadRegister(.X, self.data_latch);
                             self.endInstruction();
                         },
                         instr.STAabs => {
@@ -150,9 +142,33 @@ pub fn CPU(Bus: type) type {
             self.status_register |= @intFromEnum(flag);
         }
 
+        pub inline fn clearFlag(self: *Self, flag: StatusFlag) void {
+            self.status_register &= ~@intFromEnum(flag);
+        }
+
         // Declares current cycle to be the end of the current instruction
         inline fn endInstruction(self: *Self) void {
             self.current_instruction_cycle = instruction_cycle_reset;
+        }
+
+        inline fn loadRegister(self: *Self, register: enum {A, X, Y}, from: u16) void {
+            switch (register) {
+                .A => {
+                    self.a_register = self.safeBusRead(from);
+                    if (self.a_register == 0) self.setFlag(.zero) else self.clearFlag(.zero);
+                    if (self.a_register & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
+                },
+                .X => {
+                    self.x_register = self.safeBusRead(from);
+                    if (self.x_register == 0) self.setFlag(.zero) else self.clearFlag(.zero);
+                    if (self.x_register & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
+                },
+                .Y => {
+                    self.y_register = self.safeBusRead(from);
+                    if (self.y_register == 0) self.setFlag(.zero) else self.clearFlag(.zero);
+                    if (self.y_register & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
+                }
+            }
         }
 
         inline fn safeBusRead(self: Self, address: u16) u8 {
