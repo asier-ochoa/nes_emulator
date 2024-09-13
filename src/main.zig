@@ -93,13 +93,11 @@ test "Bus Array Read Unmapped Error" {
 }
 
 test "CPU LDAabs" {
-    var bus = util.TestBus.init();
-    var cpu = util.TestCPU.init(&bus);
-    cpu.program_counter = 0x0000;
-    // Write instruction
-    @memcpy(bus.memory_map.@"0000-EFFF"[0..3], &[_]u8{CPU.instr.LDAabs, 0x00, 0x02});
-    // Write value to be loaded
-    try bus.cpuWrite(0x0200, 0x64);
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &([_]u8{CPU.instr.LDAabs, 0x00, 0x02} ++ [_]u8{0} ** 0x01fd ++ [_]u8{0x64})
+    );
     // Execute instruction
     for (0..4) |_| {
         try cpu.tick();
@@ -114,14 +112,12 @@ test "CPU LDAabs" {
 }
 
 test "CPU STAabs" {
-    var bus = util.TestBus.init();
-    var cpu = util.TestCPU.init(&bus);
-    cpu.program_counter = 0x0000;
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &[_]u8{CPU.instr.STAabs, 0x00, 0x02}
+    );
     cpu.a_register = 0x64;
-    // Write instruction
-    @memcpy(bus.memory_map.@"0000-EFFF"[0..3], &[_]u8{CPU.instr.STAabs, 0x00, 0x02});
-    // Write value to be loaded
-    try bus.cpuWrite(0x0200, 0x64);
     // Execute instruction
     for (0..4) |_| {
         try cpu.tick();

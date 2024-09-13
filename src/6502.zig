@@ -87,7 +87,8 @@ pub fn CPU(Bus: type) type {
             switch (self.current_instruction_cycle) {
                 1 => {
                     switch (self.instruction_register) {
-                        instr.LDAabs, instr.STAabs => {
+                        // Read low byte of address for execution on memory data
+                        instr.LDAabs, instr.LDAzpg, instr.STAabs => {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
                         },
@@ -99,6 +100,10 @@ pub fn CPU(Bus: type) type {
                         instr.LDAabs, instr.STAabs => {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter += 1;
+                        },
+                        instr.LDAzpg => {
+                            self.a_register = self.safeBusRead(self.data_latch);
+                            self.current_instruction_cycle = instruction_cycle_reset;
                         },
                         else => {}
                     }
@@ -144,6 +149,7 @@ pub const reset_vector_low_order: u16 = 0xfffc;
 // Instruction pneumonics
 pub const instr = struct {
     pub const LDAabs = 0xAD;
+    pub const LDAzpg = 0xA5;
     pub const STAabs = 0x8D;
 };
 
