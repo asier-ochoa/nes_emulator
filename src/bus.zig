@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("util.zig");
 
 pub const logger = std.log.scoped(.Bus);
 
@@ -186,3 +187,28 @@ pub const BusError = error {
     UnmappedRead,
     UnmappedWrite
 };
+
+test "Bus Array Write" {
+    var bus = util.TestBus.init();
+    try bus.cpuWrite(0x0000, 0x42);
+    try bus.cpuWrite(0x0002, 0x61);
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x42, 0, 0x61}, bus.memory_map.@"0000-EFFF"[0..3]);
+}
+
+test "Bus Array Write Unmapped Error" {
+    var bus = util.TestBus.init();
+    try std.testing.expectError(BusError.UnmappedWrite, bus.cpuWrite(0xf000, 0));
+}
+
+test "Bus Array Read" {
+    var bus = util.TestBus.init();
+    @memcpy(bus.memory_map.@"0000-EFFF"[0..3], &[_]u8{0x01, 0x20, 0});
+    try std.testing.expectEqual(0x01, try bus.cpuRead(0x0000));
+    try std.testing.expectEqual(0x20, try bus.cpuRead(0x0001));
+    try std.testing.expectEqual(0, try bus.cpuRead(0x0003));
+}
+
+test "Bus Array Read Unmapped Error" {
+    var bus = util.TestBus.init();
+    try std.testing.expectError(BusError.UnmappedRead, bus.cpuRead(0xf000));
+}

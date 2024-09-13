@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("util.zig");
 
 pub const logger = std.log.scoped(.CPU);
 
@@ -197,3 +198,79 @@ pub const CPUError = error {
     IllegalClockState, // When the cpu reaches a "current_instruction_cycle" that doesn't represent any possible state
     IllegalInstruction,
 };
+
+// TODO: add zero bit status register test
+test "LDAabs" {
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &([_]u8{instr.LDAabs, 0x00, 0x02} ++ [_]u8{0} ** 0x01fd ++ [_]u8{0xF4})
+    );
+    // Execute instruction
+    for (0..4) |_| {
+        try cpu.tick();
+    }
+    try std.testing.expectEqual(util.TestCPU {
+        .a_register = 0xF4,
+        .instruction_register = instr.LDAabs,
+        .program_counter = 0x0003,
+        .data_latch = 0x0200,
+        .bus = &bus,
+        .status_register = @intFromEnum(StatusFlag.negative)
+    }, cpu);
+}
+
+test "STAabs" {
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &[_]u8{instr.STAabs, 0x00, 0x02}
+    );
+    cpu.a_register = 0x64;
+    // Execute instruction
+    for (0..4) |_| {
+        try cpu.tick();
+    }
+    try std.testing.expectEqual(0x64, bus.memory_map.@"0000-EFFF"[0x0200]);
+}
+
+// TODO: add zero bit status register test
+test "LDAzpg" {
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &([_]u8{instr.LDAzpg, 0xFE} ++ [_]u8{0} ** 0xFC ++ [_]u8{0xF4})
+    );
+    for (0..3) |_| {
+        try cpu.tick();
+    }
+    try std.testing.expectEqual(util.TestCPU {
+        .a_register = 0xF4,
+        .instruction_register = instr.LDAzpg,
+        .program_counter = 0x0002,
+        .data_latch = 0x00fe,
+        .bus = &bus,
+        .status_register = @intFromEnum(StatusFlag.negative)
+    }, cpu);
+}
+
+// TODO: add zero bit status register test
+test "LDXabs" {
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        &([_]u8{instr.LDXabs, 0x00, 0x02} ++ [_]u8{0} ** 0x01fd ++ [_]u8{0xF4})
+    );
+    // Execute instruction
+    for (0..4) |_| {
+        try cpu.tick();
+    }
+    try std.testing.expectEqual(util.TestCPU {
+        .x_register = 0xF4,
+        .instruction_register = instr.LDXabs,
+        .program_counter = 0x0003,
+        .data_latch = 0x0200,
+        .bus = &bus,
+        .status_register = @intFromEnum(StatusFlag.negative)
+    }, cpu);
+}
