@@ -89,7 +89,8 @@ pub fn CPU(Bus: type) type {
                 1 => {
                     switch (self.instruction_register) {
                         // Read low byte of address for execution on memory data
-                        instr.LDAabs, instr.LDAzpg, instr.STAabs, instr.LDXabs => {
+                        instr.LDAabs, instr.LDAzpg, instr.STAabs,
+                        instr.LDXabs, instr.LDXzpg, instr.LDAabsX => {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
                         },
@@ -102,12 +103,17 @@ pub fn CPU(Bus: type) type {
                 },
                 2 => {
                     switch (self.instruction_register) {
-                        instr.LDAabs, instr.STAabs, instr.LDXabs => {
+                        instr.LDAabs, instr.STAabs, instr.LDXabs,
+                        instr.LDAabsX => {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter += 1;
                         },
                         instr.LDAzpg => {
                             self.loadRegister(.A, self.data_latch);
+                            self.endInstruction();
+                        },
+                        instr.LDXzpg => {
+                            self.loadRegister(.X, self.data_latch);
                             self.endInstruction();
                         },
                         else => {}
@@ -125,6 +131,24 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.STAabs => {
                             self.safeBusWrite(self.data_latch, self.a_register);
+                            self.endInstruction();
+                        },
+                        instr.LDAabsX => {
+                            // Check if loading into another page
+                            if ((self.data_latch & 0x00FF) + self.x_register > 0xFF) {
+                                self.setFlag(.carry);
+                            } else {
+                                self.loadRegister(.A, self.data_latch + self.x_register);
+                                self.endInstruction();
+                            }
+                        },
+                        else => {}
+                    }
+                },
+                4 => {
+                    switch (self.instruction_register) {
+                        instr.LDAabsX => {
+                            self.loadRegister(.A, self.data_latch + self.x_register);
                             self.endInstruction();
                         },
                         else => {}
@@ -192,8 +216,10 @@ pub const reset_vector_low_order: u16 = 0xfffc;
 pub const instr = struct {
     pub const LDAabs = 0xAD;
     pub const LDAzpg = 0xA5;
-    pub const LDXabs = 0xAE;
     pub const LDAimm = 0xA9;
+    pub const LDAabsX = 0xBD;
+    pub const LDXabs = 0xAE;
+    pub const LDXzpg = 0xA6;
     pub const STAabs = 0x8D;
 };
 
@@ -297,7 +323,7 @@ test "LDXabs" {
         .x_register = 0xF4,
         .instruction_register = instr.LDXabs,
         .program_counter = 0x0003,
-        .data_latch = 0x0200,
+        .data_latch = cpu.data_latch,
         .bus = &bus,
         .status_register = @intFromEnum(StatusFlag.negative)
     }, cpu);
@@ -318,5 +344,43 @@ test "LDAimm" {
         .program_counter = 0x0001,
         .bus = &bus,
         .status_register = @intFromEnum(StatusFlag.negative)
+    }, cpu);
+}
+
+test "LDAabsX" {
+    var bus: util.TestBus = undefined;
+    var cpu: util.TestCPU = undefined;
+    try util.initCPUForTest(&cpu, &bus,
+        // LDA 0x0200, X
+        // LDA 0x0201, X (Across pages)
+        &[_]u8{instr.LDAabsX, 0x00, 0x02, instr.LDAabsX, 0x01, 0x02}
+    );
+    try bus.cpuWrite(0x0201, 0xF4);
+    try bus.cpuWrite(0x0300, 0xF5);
+    // Execute instruction
+    cpu.x_register = 0x01;
+    for (0..9) |i| {
+        try cpu.tick();
+        if (i == 3) {
+            try std.testing.expectEqual(util.TestCPU {
+                .a_register = 0xF4,
+                .x_register = 0x01,
+                .status_register = @intFromEnum(StatusFlag.negative),
+                .program_counter = 0x0003,
+                .data_latch = cpu.data_latch,
+                .instruction_register = cpu.instruction_register,
+                .bus = &bus
+            }, cpu);
+            cpu.x_register = 0xFF;
+        }
+    }
+    try std.testing.expectEqual(util.TestCPU {
+        .a_register = 0xF5,
+        .x_register = 0xFF,
+        .status_register = @intFromEnum(StatusFlag.negative) | @intFromEnum(StatusFlag.carry),
+        .program_counter = 0x0006,
+        .data_latch = cpu.data_latch,
+        .instruction_register = cpu.instruction_register,
+        .bus = &bus
     }, cpu);
 }

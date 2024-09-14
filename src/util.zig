@@ -21,6 +21,14 @@ pub fn initCPUForTest(cpu: *TestCPU, bus: *TestBus, memory: []const u8) TestErro
     }
 }
 
+pub fn emptyMem(comptime n: u32) [n]u8 {
+    return [_]u8{0} ** n;
+}
+
+pub fn leftPadMem(comptime mem: anytype, comptime n: u32) [n]u8 {
+    return mem ++ ([_]u8{0} ** (n - mem.len));
+}
+
 const TestError = error {
     ProvidedMemoryTooLarge
 };
