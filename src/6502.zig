@@ -91,7 +91,7 @@ pub fn CPU(Bus: type) type {
                         // Read low byte of address for execution on memory data
                         instr.LDAabs, instr.LDAzpg, instr.STAabs,
                         instr.LDXabs, instr.LDXzpg, instr.LDAabsX,
-                        instr.LDAabsY => {
+                        instr.LDAabsY, instr.LDAzpgX => {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
                         },
@@ -114,6 +114,7 @@ pub fn CPU(Bus: type) type {
                             self.loadRegister(.A, self.data_latch);
                             self.endInstruction();
                         },
+                        instr.LDAzpgX => {},
                         instr.LDXzpg => {
                             self.loadRegister(.X, self.data_latch);
                             self.endInstruction();
@@ -140,7 +141,7 @@ pub fn CPU(Bus: type) type {
                             if ((self.data_latch & 0x00FF) + self.x_register > 0xFF) {
                                 self.setFlag(.carry);
                             } else {
-                                self.loadRegister(.A, self.data_latch + self.x_register);
+                                self.loadRegister(.A, self.data_latch +% self.x_register);
                                 self.endInstruction();
                             }
                         },
@@ -149,9 +150,13 @@ pub fn CPU(Bus: type) type {
                             if ((self.data_latch & 0x00FF) + self.y_register > 0xFF) {
                                 self.setFlag(.carry);
                             } else {
-                                self.loadRegister(.A, self.data_latch + self.y_register);
+                                self.loadRegister(.A, self.data_latch +% self.y_register);
                                 self.endInstruction();
                             }
+                        },
+                        instr.LDXzpgX => {
+                            self.loadRegister(.A, @as(u8, @intCast(self.data_latch)) +% self.x_register);
+                            self.endInstruction();
                         },
                         else => {}
                     }
@@ -159,11 +164,11 @@ pub fn CPU(Bus: type) type {
                 4 => {
                     switch (self.instruction_register) {
                         instr.LDAabsX => {
-                            self.loadRegister(.A, self.data_latch + self.x_register);
+                            self.loadRegister(.A, self.data_latch +% self.x_register);
                             self.endInstruction();
                         },
                         instr.LDAabsY => {
-                            self.loadRegister(.A, self.data_latch + self.y_register);
+                            self.loadRegister(.A, self.data_latch +% self.y_register);
                             self.endInstruction();
                         },
                         else => {}
@@ -229,9 +234,10 @@ pub const reset_vector_low_order: u16 = 0xfffc;
 
 // Instruction pneumonics
 pub const instr = struct {
-    pub const LDAabs = 0xAD;
-    pub const LDAzpg = 0xA5;
     pub const LDAimm = 0xA9;
+    pub const LDAzpg = 0xA5;
+    pub const LDAzpgX = 0xB5;
+    pub const LDAabs = 0xAD;
     pub const LDAabsX = 0xBD;
     pub const LDAabsY = 0xB9;
     pub const LDXabs = 0xAE;
@@ -438,3 +444,5 @@ test "LDAabsY" {
         .bus = &bus
     }, cpu);
 }
+
+// Writting tests is slowing me down too much :(
