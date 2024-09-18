@@ -46,7 +46,7 @@ pub fn CPU(Bus: type) type {
             } else {
                 switch (self.current_instruction_cycle) {
                     0 => self.fetchInstruction(),
-                    else => self.processInstruction()
+                    else => try self.processInstruction()
                 }
             }
             self.current_instruction_cycle += 1;
@@ -84,7 +84,7 @@ pub fn CPU(Bus: type) type {
         // Master list of all instructions
         // Big switch case that uses the instruction + the current cycle to determine what to do.
         // ATTENTION: In order to reset the current instruction cycle, set it to
-        fn processInstruction(self: *Self) void {
+        fn processInstruction(self: *Self) CPUError!void {
             switch (self.current_instruction_cycle) {
                 1 => {
                     switch (self.instruction_register) {
@@ -99,7 +99,7 @@ pub fn CPU(Bus: type) type {
                             self.loadRegister(.A, self.program_counter);
                             self.endInstruction();
                         },
-                        else => {} //TODO: log illegal instructions
+                        else => return logIllegalInstruction(self.*) //TODO: log illegal instructions
                     }
                 },
                 2 => {
@@ -119,7 +119,7 @@ pub fn CPU(Bus: type) type {
                             self.loadRegister(.X, self.data_latch);
                             self.endInstruction();
                         },
-                        else => {}
+                        else => return logIllegalInstruction(self.*)
                     }
                 },
                 3 => {
@@ -154,11 +154,11 @@ pub fn CPU(Bus: type) type {
                                 self.endInstruction();
                             }
                         },
-                        instr.LDXzpgX => {
+                        instr.LDAzpgX => {
                             self.loadRegister(.A, @as(u8, @intCast(self.data_latch)) +% self.x_register);
                             self.endInstruction();
                         },
-                        else => {}
+                        else => return logIllegalInstruction(self.*)
                     }
                 },
                 4 => {
@@ -171,7 +171,7 @@ pub fn CPU(Bus: type) type {
                             self.loadRegister(.A, self.data_latch +% self.y_register);
                             self.endInstruction();
                         },
-                        else => {}
+                        else => return logIllegalInstruction(self.*)
                     }
                 },
                 else => {}
@@ -227,6 +227,24 @@ pub fn CPU(Bus: type) type {
                 logger.warn("Unmapped write to address 0x{X:0>4} with value 0x{X:0>2}\n", .{address, data});
             };
         }
+
+        fn logIllegalInstruction(self: Self) CPUError!void {
+            // Find opcode name to dissasemble
+            const instr_name = switch (self.instruction_register) {
+                inline 0...0xFF => |opcode| comptime blk: {
+                    @setEvalBranchQuota(3000);
+                    for (@typeInfo(instr).Struct.decls) |d| {
+                        if (@field(instr, d.name) == opcode) break :blk d.name;
+                    }
+                    break :blk "<UNKNOWN>";
+                }
+            };
+            logger.err(
+                "Reached illegal instruction \"{s}\" on cycle T{}\nA = 0x{X:2>0}, X = 0x{X:2>0}, Y = 0x{X:2>0}, PC = 0x{X:4>0}, S = 0b{b:8>0}\n",
+                .{instr_name, self.current_instruction_cycle, self.a_register, self.x_register, self.y_register, self.program_counter, self.status_register}
+            );
+            return error.IllegalInstruction;
+        }
     };
 }
 
@@ -273,6 +291,7 @@ pub const StatusFlag = enum(u8) {
 pub const CPUError = error {
     IllegalClockState, // When the cpu reaches a "current_instruction_cycle" that doesn't represent any possible state
     IllegalInstruction,
+    NotImplemented
 };
 
 // TODO: add zero bit status register test
@@ -443,6 +462,10 @@ test "LDAabsY" {
         .instruction_register = cpu.instruction_register,
         .bus = &bus
     }, cpu);
+}
+
+test "Full Instruction Rom" {
+    
 }
 
 // Writting tests is slowing me down too much :(

@@ -16,19 +16,20 @@ pub const std_options = std.Options {
 
 pub fn main() !void {
     // Set up CPU
-    const NesMemoryMap = struct {
+    const TestMemoryMap = struct {
         @"0000-AFFF": [0xb000]u8,
         @"B000-BFFE": struct {
-            pub fn onRead(_: u16) u8 {
+            const Self = @This();
+            pub fn onRead(_: *Self, _: u16, _: anytype) u8 {
                 return 20;
             }
-            pub fn onWrite(address: u16, data: u8) void {
+            pub fn onWrite(_: *Self, address: u16, data: u8, _: anytype) void {
                 std.debug.print("I have been called to write on address 0x{X:0<4} with value {}\n", .{address, data});
             }
         },
         @"FFFC-FFFF": [0x0004]u8,
     };
-    var bus = Bus.Bus(NesMemoryMap).init();
+    var bus = Bus.Bus(TestMemoryMap).init();
     var cpu = CPU.CPU(@TypeOf(bus)).init(&bus);
     cpu.status_register = 0b00010011;
 
@@ -49,11 +50,11 @@ pub fn main() !void {
     std.debug.print("\n----Testing bus writes----\n", .{});
     try bus.cpuWrite(0x0000, 55);
     try bus.cpuWrite(0x0001, 40);
-    try readTest(0x0000, bus);
-    try readTest(0x0001, bus);
+    try readTest(0x0000, &bus);
+    try readTest(0x0001, &bus);
 
     try bus.cpuWrite(0xBFF0, 68);
-    try readTest(0xBFF0, bus);
+    try readTest(0xBFF0, &bus);
 
     // Testing cpu reset
     std.debug.print("\n----Testing cpu reset----\n", .{});
