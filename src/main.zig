@@ -2,6 +2,7 @@ const std = @import("std");
 const CPU = @import("6502.zig");
 const Bus = @import("bus.zig");
 const util = @import("util.zig");
+const rom_loader = @import("rom_loader.zig");
 
 fn readTest(comptime address: u16, bus: anytype) !void {
     std.debug.print(
@@ -15,6 +16,30 @@ pub const std_options = std.Options {
 };
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    const alloc = gpa.allocator();
+
+    var bus = util.NesBus.init();
+    var cpu = CPU.CPU(@TypeOf(bus)).init(&bus);
+    cpu.program_counter = 0xC000;
+
+    // Load ines rom
+    const file = try std.fs.cwd().openFile("src/resources/nestest.nes", .{});
+    const data = try alloc.alloc(u8, (try file.metadata()).size());
+    defer alloc.free(data);
+
+    _ = try file.readAll(data);
+
+    rom_loader.load_ines_into_bus(data, &bus);
+
+    while (true) {
+        try cpu.tick();
+    }
+}
+
+fn oldMain() !void {
     // Set up CPU
     const TestMemoryMap = struct {
         @"0000-AFFF": [0xb000]u8,
@@ -66,4 +91,8 @@ pub fn main() !void {
         if (i == 5) std.debug.print("PC after reading low order reset vector: 0x{X:0>4}\n", .{cpu.program_counter});
     }
     std.debug.print("PC after reset: 0x{X:0>4}\n", .{cpu.program_counter});
+}
+
+test "debug main" {
+    try main();
 }
