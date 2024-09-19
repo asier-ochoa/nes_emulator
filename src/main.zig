@@ -16,6 +16,9 @@ pub const std_options = std.Options {
 };
 
 pub fn main() !void {
+    const stdout = std.io.getStdIn().reader();
+    var buf = [_]u8{0, 0};
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
@@ -27,6 +30,7 @@ pub fn main() !void {
 
     // Load ines rom
     const file = try std.fs.cwd().openFile("src/resources/nestest.nes", .{});
+    defer file.close();
     const data = try alloc.alloc(u8, (try file.metadata()).size());
     defer alloc.free(data);
 
@@ -36,6 +40,13 @@ pub fn main() !void {
 
     while (true) {
         try cpu.tick();
+        _ = try stdout.read(&buf);
+        switch (buf[0]) {
+            'p' => try bus.printPage(cpu.program_counter),
+            '\n' => {},
+            else => {},
+        }
+        std.debug.print("CPU State: {any}\n", .{cpu});
     }
 }
 

@@ -184,6 +184,20 @@ pub fn Bus(SuppliedMMap: type) type {
         fn getUnmappedRegions() []const u8 {
             return "";
         }
+
+        pub fn printPage(self: *Self, address: u16) !void {
+            const start = address >> 2 << 2;  // Set address to start of page
+            var i = start;
+            while (i < start + 0xFF + 1) : (i += 1) {
+                if (i == address) std.debug.print("[", .{});
+                std.debug.print(
+                    "{X:0>2}",
+                    .{try self.cpuRead(i)}
+                );
+                if (i == address) std.debug.print("] ", .{}) else std.debug.print(" ", .{});
+                if (@mod(i + 1, 16) == 0) std.debug.print("\n", .{});
+            }
+        }
     };
 }
 
