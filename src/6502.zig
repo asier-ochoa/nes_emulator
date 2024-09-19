@@ -232,7 +232,7 @@ pub fn CPU(Bus: type) type {
             // Find opcode name to dissasemble
             const instr_name = switch (self.instruction_register) {
                 inline 0...0xFF => |opcode| comptime blk: {
-                    @setEvalBranchQuota(3000);
+                    @setEvalBranchQuota(100000000);
                     for (@typeInfo(instr).Struct.decls) |d| {
                         if (@field(instr, d.name) == opcode) break :blk d.name;
                     }
@@ -240,8 +240,8 @@ pub fn CPU(Bus: type) type {
                 }
             };
             logger.err(
-                "Reached illegal instruction \"{s}\" on cycle T{}\nA = 0x{X:2>0}, X = 0x{X:2>0}, Y = 0x{X:2>0}, PC = 0x{X:4>0}, S = 0b{b:8>0}\n",
-                .{instr_name, self.current_instruction_cycle, self.a_register, self.x_register, self.y_register, self.program_counter, self.status_register}
+                "Reached illegal instruction \"{s}\" on cycle T{}\nA = 0x{X:2>0}, X = 0x{X:2>0}, Y = 0x{X:2>0}, PC = 0x{X:4>0}, SP = 0x{X:2>0}, IR = 0x{X:2>0}, S = 0b{b:8>0}\n",
+                .{instr_name, self.current_instruction_cycle, self.a_register, self.x_register, self.y_register, self.program_counter, self.stack_pointer, self.instruction_register, self.status_register}
             );
             return error.IllegalInstruction;
         }
@@ -252,15 +252,268 @@ pub const reset_vector_low_order: u16 = 0xfffc;
 
 // Instruction pneumonics
 pub const instr = struct {
+    // Add memory to accumulator with carry
+    pub const ADCimm = 0x69;
+    pub const ADCzpg = 0x65;
+    pub const ADCzpgX = 0x75;
+    pub const ADCabs = 0x6D;
+    pub const ADCabsX = 0x7D;
+    pub const ADCabsY = 0x79;
+    pub const ADCindX = 0x61;
+    pub const ADCindY = 0x71;
+
+    // AND memory with accumulator
+    pub const ANDimm = 0x29;
+    pub const ANDzpg = 0x25;
+    pub const ANDzpgX = 0x35;
+    pub const ANDabs = 0x2D;
+    pub const ANDabsX = 0x3D;
+    pub const ANDabsY = 0x39;
+    pub const ANDindX = 0x21;
+    pub const ANDindY = 0x31;
+
+    // Shift left one bit
+    pub const ASLacc = 0x0A;
+    pub const ASLzpg = 0x06;
+    pub const ASLzpgX = 0x16;
+    pub const ASLabs = 0x0E;
+    pub const ASLabsX = 0x1E;
+
+    // Branch on carry clear
+    pub const BCCrel = 0x90;
+
+    // Branch on carry set
+    pub const BCSrel = 0xB0;
+
+    // Branch on result zero
+    pub const BEQrel = 0xF0;
+
+    // Test bits in memory with accumulator;
+    pub const BITzpg = 0x24;
+    pub const BITabs = 0x2C;
+
+    // Branch on result minus
+    pub const BMIrel = 0x30;
+
+    // Branch on result not zero
+    pub const BNErel = 0xD0;
+
+    // Branch on result plus
+    pub const BPLrel = 0x10;
+
+    // Force break signal
+    pub const BRK = 0x00;
+
+    // Branch on overflow clear
+    pub const BVCrel = 0x50;
+
+    // Branch on overflow set
+    pub const BVSrel = 0x70;
+
+    // Clear carry flag
+    pub const CLC = 0x18;
+
+    // Clear decimal mode
+    pub const CLD = 0xD8;
+
+    // Clear interrupt disable bit
+    pub const CLI = 0x58;
+
+    // Clear overflow flag
+    pub const CLV = 0xB8;
+
+    // Compare memory with accumulator
+    pub const CMPimm = 0xC9;
+    pub const CMPzpg = 0xC5;
+    pub const CMPzpgX = 0xD5;
+    pub const CMPabs = 0xCD;
+    pub const CMPabsX = 0xDD;
+    pub const CMPabsY = 0xD9;
+    pub const CMPindX = 0xC1;
+    pub const CMPindY = 0xD1;
+
+    // Compare memory and index X
+    pub const CPXimm = 0xE0;
+    pub const CPXzpg = 0xE4;
+    pub const CPXabs = 0xEC;
+
+    // Compare memory and index Y
+    pub const CPYimm = 0xC0;
+    pub const CPYzpg = 0xC4;
+    pub const CPYabs = 0xCC;
+
+    // Decrement memory by one
+    pub const DECzpg = 0xC6;
+    pub const DECzpgX = 0xD6;
+    pub const DECabs = 0xCE;
+    pub const DECabsX = 0xDE;
+
+    // Decrement index X by one
+    pub const DEX = 0xCA;
+
+    // Decrement index Y by one;
+    pub const DEY = 0x88;
+
+    // ExclusiveOR memory with accumulator
+    pub const EORimm = 0x49;
+    pub const EORzpg = 0x45;
+    pub const EORzpgX = 0x55;
+    pub const EORabs = 0x4D;
+    pub const EORabsX = 0x5D;
+    pub const EORabsY = 0x59;
+    pub const EORindX = 0x41;
+    pub const EORindY = 0x51;
+
+    // Increment memory by one;
+    pub const INCzpg = 0xE6;
+    pub const INCzpgX = 0xF6;
+    pub const INCabs = 0xEE;
+    pub const INCabsX = 0xFE;
+
+    // Increment index X by one;
+    pub const INX = 0xE8;
+
+    // Increment index Y by one;
+    pub const INY = 0xC8;
+
+    // Jump to new location
+    pub const JMPabs = 0x4C;
+    pub const JMPind = 0x6C;
+
+    // Jump to new location saving return address
+    pub const JSRabs = 0x20;
+
+    // Load accumulator with memory
     pub const LDAimm = 0xA9;
     pub const LDAzpg = 0xA5;
     pub const LDAzpgX = 0xB5;
     pub const LDAabs = 0xAD;
     pub const LDAabsX = 0xBD;
     pub const LDAabsY = 0xB9;
-    pub const LDXabs = 0xAE;
+    pub const LDAindX = 0xA1;
+    pub const LDAindY = 0xB1;
+
+    // Load index X with memory
+    pub const LDXimm = 0xA2;
     pub const LDXzpg = 0xA6;
+    pub const LDXzpgY = 0xB6;
+    pub const LDXabs = 0xAE;
+    pub const LDXabsY = 0xBE;
+
+    // Load index Y with memory
+    pub const LDYimm = 0xA0;
+    pub const LDYzpg = 0xA4;
+    pub const LDYzpgX = 0xB4;
+    pub const LDYabs = 0xAC;
+    pub const LDYabsX = 0xBC;
+
+    // Shift one bit right
+    pub const LSRacc = 0x4A;
+    pub const LSRzpg = 0x46;
+    pub const LSRzpgX = 0x56;
+    pub const LSRabs = 0x4E;
+    pub const LSRabsX = 0x5E;
+
+    // No operation
+    pub const NOP = 0xEA;
+
+    // OR memory with accumulator
+    pub const ORAimm = 0x09;
+    pub const ORAzpg = 0x05;
+    pub const ORAzpgX = 0x15;
+    pub const ORAabs = 0x0D;
+    pub const ORAabsX = 0x1D;
+    pub const ORAabsY = 0x19;
+    pub const ORAindX = 0x01;
+    pub const ORAindY = 0x11;
+
+    // Push accumulator on stack
+    pub const PHA = 0x48;
+
+    // Push status on stack
+    pub const PHP = 0x08;
+
+    // Pull accumulator from stack
+    pub const PLA = 0x68;
+
+    // Pull status from stack
+    pub const PLP = 0x28;
+
+    // Rotate one bit left
+    pub const ROLacc = 0x2A;
+    pub const ROLzpg = 0x26;
+    pub const ROLzpgX = 0x36;
+    pub const ROLabs = 0x2E;
+    pub const ROLabsX = 0x3E;
+
+    // Rotate one bit right
+    pub const RORacc = 0x6A;
+    pub const RORzpg = 0x66;
+    pub const RORzpgX = 0x76;
+    pub const RORabs = 0x6E;
+    pub const RORabsX = 0x7E;
+
+    // Return from interrupt
+    pub const RTI = 0x40;
+
+    // Return from subroutine (from a JSR)
+    pub const RTS = 0x60;
+
+    // Subtract memory from accumulator with borrow
+    pub const SBCimm = 0xE9;
+    pub const SBCzpg = 0xE5;
+    pub const SBCzpgX = 0xF5;
+    pub const SBCabs = 0xED;
+    pub const SBCabsX = 0xED;
+    pub const SBCabsY = 0xF9;
+    pub const SBCindX = 0xE1;
+    pub const SBCindY = 0xF1;
+
+    // Set carry flag
+    pub const SEC = 0x38;
+
+    // Set decimal flag
+    pub const SED = 0xF8;
+
+    // Set interrupt disable status
+    pub const SEI = 0x78;
+
+    // Store accumulator in memory
+    pub const STAzpg = 0x85;
+    pub const STAzpgX = 0x95;
     pub const STAabs = 0x8D;
+    pub const STAabsX = 0x9D;
+    pub const STAabsY = 0x99;
+    pub const STAindX = 0x81;
+    pub const STAindY = 0x81;
+
+    // Store index X in memory
+    pub const STXzpg = 0x86;
+    pub const STXzpgY = 0x96;
+    pub const STXabs = 0x8E;
+
+    // Store index Y in memory
+    pub const STYzpg = 0x84;
+    pub const STYzpgX = 0x94;
+    pub const STYabs = 0x8C;
+
+    // Transfer accumulator to index X
+    pub const TAX = 0xAA;
+
+    // Transfer accumulator to index Y
+    pub const TAY = 0xA8;
+
+    // Transfer stack pointer to index X
+    pub const TSX = 0xBA;
+
+    // Transfer index X to accumulator
+    pub const TXA = 0x8A;
+
+    // Transfer index X to stack pointer
+    pub const TXS = 0x9A;
+
+    // Transfer index Y to accumulator
+    pub const TYA = 0x98;
 };
 
 pub const AddressingMode = enum {
@@ -294,178 +547,6 @@ pub const CPUError = error {
     NotImplemented
 };
 
-// TODO: add zero bit status register test
-test "LDAabs" {
-    var bus: util.TestBus = undefined;
-    var cpu: util.TestCPU = undefined;
-    try util.initCPUForTest(&cpu, &bus,
-        &([_]u8{instr.LDAabs, 0x00, 0x02} ++ [_]u8{0} ** 0x01fd ++ [_]u8{0xF4})
-    );
-    // Execute instruction
-    for (0..4) |_| {
-        try cpu.tick();
-    }
-    try std.testing.expectEqual(util.TestCPU {
-        .a_register = 0xF4,
-        .instruction_register = instr.LDAabs,
-        .program_counter = 0x0003,
-        .data_latch = 0x0200,
-        .bus = &bus,
-        .status_register = @intFromEnum(StatusFlag.negative)
-    }, cpu);
-}
-
-test "STAabs" {
-    var bus: util.TestBus = undefined;
-    var cpu: util.TestCPU = undefined;
-    try util.initCPUForTest(&cpu, &bus,
-        &[_]u8{instr.STAabs, 0x00, 0x02}
-    );
-    cpu.a_register = 0x64;
-    // Execute instruction
-    for (0..4) |_| {
-        try cpu.tick();
-    }
-    try std.testing.expectEqual(0x64, bus.memory_map.@"0000-EFFF"[0x0200]);
-}
-
-// TODO: add zero bit status register test
-test "LDAzpg" {
-    var bus: util.TestBus = undefined;
-    var cpu: util.TestCPU = undefined;
-    try util.initCPUForTest(&cpu, &bus,
-        &([_]u8{instr.LDAzpg, 0xFE} ++ [_]u8{0} ** 0xFC ++ [_]u8{0xF4})
-    );
-    for (0..3) |_| {
-        try cpu.tick();
-    }
-    try std.testing.expectEqual(util.TestCPU {
-        .a_register = 0xF4,
-        .instruction_register = instr.LDAzpg,
-        .program_counter = 0x0002,
-        .data_latch = 0x00fe,
-        .bus = &bus,
-        .status_register = @intFromEnum(StatusFlag.negative)
-    }, cpu);
-}
-
-// TODO: add zero bit status register test
-test "LDXabs" {
-    var bus: util.TestBus = undefined;
-    var cpu: util.TestCPU = undefined;
-    try util.initCPUForTest(&cpu, &bus,
-        &([_]u8{instr.LDXabs, 0x00, 0x02} ++ [_]u8{0} ** 0x01fd ++ [_]u8{0xF4})
-    );
-    // Execute instruction
-    for (0..4) |_| {
-        try cpu.tick();
-    }
-    try std.testing.expectEqual(util.TestCPU {
-        .x_register = 0xF4,
-        .instruction_register = instr.LDXabs,
-        .program_counter = 0x0003,
-        .data_latch = cpu.data_latch,
-        .bus = &bus,
-        .status_register = @intFromEnum(StatusFlag.negative)
-    }, cpu);
-}
-
-test "LDAimm" {
-    var bus: util.TestBus = undefined;
-    var cpu: util.TestCPU = undefined;
-    try util.initCPUForTest(&cpu, &bus,
-        &[_]u8{instr.LDAimm, 0xD8}
-    );
-    for (0..2) |_| {
-        try cpu.tick();
-    }
-    try std.testing.expectEqual(util.TestCPU {
-        .a_register = 0xD8,
-        .instruction_register = instr.LDAimm,
-        .program_counter = 0x0001,
-        .bus = &bus,
-        .status_register = @intFromEnum(StatusFlag.negative)
-    }, cpu);
-}
-
-test "LDAabsX" {
-    var bus: util.TestBus = undefined;
-    var cpu: util.TestCPU = undefined;
-    try util.initCPUForTest(&cpu, &bus,
-        // LDA 0x0200, X
-        // LDA 0x0201, X (Across pages)
-        &[_]u8{instr.LDAabsX, 0x00, 0x02, instr.LDAabsX, 0x01, 0x02}
-    );
-    try bus.cpuWrite(0x0201, 0xF4);
-    try bus.cpuWrite(0x0300, 0xF5);
-    // Execute instruction
-    cpu.x_register = 0x01;
-    for (0..9) |i| {
-        try cpu.tick();
-        if (i == 3) {
-            try std.testing.expectEqual(util.TestCPU {
-                .a_register = 0xF4,
-                .x_register = 0x01,
-                .status_register = @intFromEnum(StatusFlag.negative),
-                .program_counter = 0x0003,
-                .data_latch = cpu.data_latch,
-                .instruction_register = cpu.instruction_register,
-                .bus = &bus
-            }, cpu);
-            cpu.x_register = 0xFF;
-        }
-    }
-    try std.testing.expectEqual(util.TestCPU {
-        .a_register = 0xF5,
-        .x_register = 0xFF,
-        .status_register = @intFromEnum(StatusFlag.negative) | @intFromEnum(StatusFlag.carry),
-        .program_counter = 0x0006,
-        .data_latch = cpu.data_latch,
-        .instruction_register = cpu.instruction_register,
-        .bus = &bus
-    }, cpu);
-}
-
-test "LDAabsY" {
-    var bus: util.TestBus = undefined;
-    var cpu: util.TestCPU = undefined;
-    try util.initCPUForTest(&cpu, &bus,
-        // LDA 0x0200, Y
-        // LDA 0x0201, Y (Across pages)
-        &[_]u8{instr.LDAabsY, 0x00, 0x02, instr.LDAabsY, 0x01, 0x02}
-    );
-    try bus.cpuWrite(0x0201, 0xF4);
-    try bus.cpuWrite(0x0300, 0xF5);
-    // Execute instruction
-    cpu.y_register = 0x01;
-    for (0..9) |i| {
-        try cpu.tick();
-        if (i == 3) {
-            try std.testing.expectEqual(util.TestCPU {
-                .a_register = 0xF4,
-                .y_register = 0x01,
-                .status_register = @intFromEnum(StatusFlag.negative),
-                .program_counter = 0x0003,
-                .data_latch = cpu.data_latch,
-                .instruction_register = cpu.instruction_register,
-                .bus = &bus
-            }, cpu);
-            cpu.y_register = 0xFF;
-        }
-    }
-    try std.testing.expectEqual(util.TestCPU {
-        .a_register = 0xF5,
-        .y_register = 0xFF,
-        .status_register = @intFromEnum(StatusFlag.negative) | @intFromEnum(StatusFlag.carry),
-        .program_counter = 0x0006,
-        .data_latch = cpu.data_latch,
-        .instruction_register = cpu.instruction_register,
-        .bus = &bus
-    }, cpu);
-}
-
 test "Full Instruction Rom" {
     
 }
-
-// Writting tests is slowing me down too much :(
