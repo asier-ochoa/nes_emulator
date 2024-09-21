@@ -91,14 +91,22 @@ pub fn CPU(Bus: type) type {
                         // Read low byte of address for execution on memory data
                         instr.LDAabs, instr.LDAzpg, instr.STAabs,
                         instr.LDXabs, instr.LDXzpg, instr.LDAabsX,
-                        instr.LDAabsY, instr.LDAzpgX => {
+                        instr.LDAabsY, instr.LDAzpgX, instr.CMPzpg,
+                        instr.JMPabs, instr.SBCzpgX, instr.SEI,
+                        instr.STXzpg => {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
                         },
-                        instr.LDAimm => {
-                            self.loadRegister(.A, self.program_counter);
+                        instr.LDAimm, instr.LDXimm => |instruction| {
+                            switch (instruction) {
+                                instr.LDXimm => self.loadRegister(.X, self.program_counter),
+                                instr.LDAimm => self.loadRegister(.A, self.program_counter),
+                                else => unreachable
+                            }
+                             self.program_counter += 1;
                             self.endInstruction();
                         },
+                        instr.RTS => {},
                         else => return logIllegalInstruction(self.*) //TODO: log illegal instructions
                     }
                 },
@@ -106,17 +114,35 @@ pub fn CPU(Bus: type) type {
                     switch (self.instruction_register) {
                         // All instructions that need to read the high byte of the operand
                         instr.LDAabs, instr.STAabs, instr.LDXabs,
-                        instr.LDAabsX, instr.LDAabsY => {
+                        instr.LDAabsX, instr.LDAabsY, instr.JMPabs => |instruction| {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
-                            self.program_counter += 1;
+                            self.program_counter = switch (instruction) {
+                                instr.JMPabs => blk: {
+                                    self.endInstruction();
+                                    break :blk self.data_latch;
+                                },
+                                else => self.program_counter + 1
+                            };
                         },
                         instr.LDAzpg => {
                             self.loadRegister(.A, self.data_latch);
                             self.endInstruction();
                         },
-                        instr.LDAzpgX => {},
+                        instr.LDAzpgX, instr.SBCzpgX, instr.RTS => {},
                         instr.LDXzpg => {
                             self.loadRegister(.X, self.data_latch);
+                            self.endInstruction();
+                        },
+                        instr.CMPzpg => {
+                            self.setCompareFlags(self.safeBusRead(self.data_latch));
+                            self.endInstruction();
+                        },
+                        instr.SEI => {
+                            self.clearFlag(.irq_disable);
+                            self.endInstruction();
+                        },
+                        instr.STXzpg => {
+                            self.safeBusWrite(self.data_latch, self.x_register);
                             self.endInstruction();
                         },
                         else => return logIllegalInstruction(self.*)
@@ -158,6 +184,16 @@ pub fn CPU(Bus: type) type {
                             self.loadRegister(.A, @as(u8, @intCast(self.data_latch)) +% self.x_register);
                             self.endInstruction();
                         },
+                        instr.SBCzpgX => {
+                            const val = self.safeBusRead(@as(u8, @intCast(self.data_latch)) +% self.x_register);
+                            const inverse_flag: i8 = @bitCast(~(self.status_register) & 0b00000001);
+                            self.a_register = @bitCast(@as(i8, @bitCast(self.a_register)) -% @as(i8, @bitCast(val)) - inverse_flag);
+                            self.endInstruction();
+                        },
+                        instr.RTS => {
+                            self.stack_pointer +%= 1;
+                            self.data_latch = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
+                        },
                         else => return logIllegalInstruction(self.*)
                     }
                 },
@@ -171,10 +207,23 @@ pub fn CPU(Bus: type) type {
                             self.loadRegister(.A, self.data_latch +% self.y_register);
                             self.endInstruction();
                         },
+                        instr.RTS => {
+                            self.stack_pointer +%= 1;
+                            self.data_latch |= @as(u16, self.safeBusRead(0x0100 | @as(u16, self.stack_pointer))) << 8;
+                        },
                         else => return logIllegalInstruction(self.*)
                     }
                 },
-                else => {}
+                5 => {
+                    switch (self.instruction_register) {
+                        instr.RTS => {
+                            self.program_counter = self.data_latch;
+                            self.endInstruction();
+                        },
+                        else => return logIllegalInstruction(self.*)
+                    }
+                },
+                else => return logIllegalInstruction(self.*)
             }
         }
 
@@ -215,6 +264,13 @@ pub fn CPU(Bus: type) type {
             }
         }
 
+        fn setCompareFlags(self: *Self, value: u8) void {
+            const comp_result = @as(i16, @as(i8, @bitCast(self.a_register))) - value;
+            if (comp_result & 0x00FF & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
+            if (comp_result < -128) self.setFlag(.carry) else self.clearFlag(.carry);
+            if (comp_result == 0) self.setFlag(.zero) else self.clearFlag(.zero);
+        }
+
         inline fn safeBusRead(self: Self, address: u16) u8 {
             return self.bus.cpuRead(address) catch blk: {
                 logger.warn("Unmapped read from address 0x{X:0>4}, returning 0\n", .{address});
@@ -226,6 +282,13 @@ pub fn CPU(Bus: type) type {
             self.bus.cpuWrite(address, data) catch {
                 logger.warn("Unmapped write to address 0x{X:0>4} with value 0x{X:0>2}\n", .{address, data});
             };
+        }
+
+        pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            try writer.print(
+                "A = 0x{X:0>2}, X = 0x{X:0>2}, Y = 0x{X:0>2}, PC = 0x{X:0>4}, SP = 0x{X:0>2}, IR = 0x{X:0>2}, S = 0b{b:0>8}",
+                .{self.a_register, self.x_register, self.y_register, self.program_counter, self.stack_pointer, self.instruction_register, self.status_register}
+            );
         }
 
         fn logIllegalInstruction(self: Self) CPUError!void {
@@ -240,8 +303,8 @@ pub fn CPU(Bus: type) type {
                 }
             };
             logger.err(
-                "Reached illegal instruction \"{s}\" on cycle T{}\nA = 0x{X:2>0}, X = 0x{X:2>0}, Y = 0x{X:2>0}, PC = 0x{X:4>0}, SP = 0x{X:2>0}, IR = 0x{X:2>0}, S = 0b{b:8>0}\n",
-                .{instr_name, self.current_instruction_cycle, self.a_register, self.x_register, self.y_register, self.program_counter, self.stack_pointer, self.instruction_register, self.status_register}
+                "Reached illegal instruction \"{s}\" on cycle T{}\n{any}\n",
+                .{instr_name, self.current_instruction_cycle, self}
             );
             return error.IllegalInstruction;
         }

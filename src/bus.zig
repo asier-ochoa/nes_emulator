@@ -186,7 +186,7 @@ pub fn Bus(SuppliedMMap: type) type {
         }
 
         pub fn printPage(self: *Self, address: u16) !void {
-            const start = address >> 2 << 2;  // Set address to start of page
+            const start = address & 0xFF00;  // Set address to start of page
             var i = start;
             while (i < start + 0xFF + 1) : (i += 1) {
                 if (i == address) std.debug.print("[", .{});
