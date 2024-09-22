@@ -96,7 +96,8 @@ pub fn CPU(Bus: type) type {
                         instr.STXzpg, instr.JSRabs, instr.BCSrel,
                         instr.BCCrel, instr.BEQrel, instr.BNErel,
                         instr.STAzpg, instr.BITzpg, instr.BVSrel,
-                        instr.BVCrel, instr.BPLrel => |instruction| {
+                        instr.BVCrel, instr.BPLrel, instr.BMIrel,
+                        instr.STYzpg, instr.STXabs, instr.ANDzpgX => |instruction| {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
 
@@ -108,31 +109,95 @@ pub fn CPU(Bus: type) type {
                             if (instruction == instr.BVSrel and !self.isFlagSet(.overflow)) self.endInstruction();
                             if (instruction == instr.BVCrel and self.isFlagSet(.overflow)) self.endInstruction();
                             if (instruction == instr.BPLrel and self.isFlagSet(.negative)) self.endInstruction();
+                            if (instruction == instr.BMIrel and !self.isFlagSet(.negative)) self.endInstruction();
                         },
-                        instr.LDAimm, instr.LDXimm => |instruction| {
+                        instr.LDAimm, instr.LDXimm, instr.ANDimm,
+                        instr.ORAimm, instr.EORimm, instr.ADCimm,
+                        instr.LDYimm, instr.CPYimm, instr.CPXimm,
+                        instr.SBCimm, instr.CMPimm => |instruction| {
                             switch (instruction) {
-                                instr.LDXimm => self.loadRegister(.X, self.program_counter),
-                                instr.LDAimm => self.loadRegister(.A, self.program_counter),
+                                instr.LDXimm => self.loadRegister(.X, self.safeBusRead(self.program_counter)),
+                                instr.LDAimm => self.loadRegister(.A, self.safeBusRead(self.program_counter)),
+                                instr.LDYimm => self.loadRegister(.Y, self.safeBusRead(self.program_counter)),
+                                instr.ANDimm => self.loadRegister(.A, self.a_register & self.safeBusRead(self.program_counter)),
+                                instr.ORAimm => self.loadRegister(.A, self.a_register | self.safeBusRead(self.program_counter)),
+                                instr.EORimm => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.program_counter)),
+                                instr.ADCimm => self.addWithCarry(self.safeBusRead(self.program_counter), false),
+                                instr.SBCimm => self.addWithCarry(~self.safeBusRead(self.program_counter), true),
+                                instr.CPYimm => self.setCompareFlags(self.safeBusRead(self.program_counter), .Y),
+                                instr.CPXimm => self.setCompareFlags(self.safeBusRead(self.program_counter), .X),
+                                instr.CMPimm => self.setCompareFlags(self.safeBusRead(self.program_counter), .A),
                                 else => unreachable
                             }
                             self.program_counter += 1;
                             self.endInstruction();
                         },
-                        instr.SEC, instr.CLC => |instruction| {
-                            if (instruction == instr.CLC) self.clearFlag(.carry)
-                            else self.setFlag(.carry);
+                        instr.SEC, instr.SED => |instruction| {
+                            self.setFlag(switch (instruction) {
+                                instr.SED => .decimal,
+                                instr.SEC => .carry,
+                                else => unreachable
+                            });
+                            self.endInstruction();
+                        },
+                        instr.CLD, instr.CLC, instr.CLV => |instruction| {
+                            self.clearFlag(switch (instruction) {
+                                instr.CLD => .decimal,
+                                instr.CLC => .carry,
+                                instr.CLV => .overflow,
+                                else => unreachable
+                            });
                             self.endInstruction();
                         },
                         instr.NOP => self.endInstruction(),
-                        instr.RTS => {},
-                        else => return logIllegalInstruction(self.*) //TODO: log illegal instructions
+                        instr.RTS, instr.PHP, instr.PLA,
+                        instr.PHA, instr.PLP, instr.RTI => {},
+                        instr.INY, instr.INX, instr.DEY,
+                        instr.DEX, instr.TAY, instr.TAX,
+                        instr.TXA, instr.TYA, instr.TSX,
+                        instr.TXS => |instruction| {
+                            switch (instruction) {
+                                instr.INY => self.loadRegister(.Y, self.y_register +% 1),
+                                instr.INX => self.loadRegister(.X, self.x_register +% 1),
+                                instr.DEY => self.loadRegister(.Y, self.y_register -% 1),
+                                instr.DEX => self.loadRegister(.X, self.x_register -% 1),
+                                instr.TAY => self.loadRegister(.Y, self.a_register),
+                                instr.TAX => self.loadRegister(.X, self.a_register),
+                                instr.TYA => self.loadRegister(.A, self.y_register),
+                                instr.TXA => self.loadRegister(.A, self.x_register),
+                                instr.TSX => self.loadRegister(.X, self.stack_pointer),
+                                instr.TXS => self.stack_pointer = self.x_register,
+                                else => unreachable
+                            }
+                            self.endInstruction();
+                        },
+                        instr.LSRacc, instr.RORacc => |instruction| {
+                            if (self.a_register & 0b00000001 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
+                            self.loadRegister(.A, switch (instruction) {
+                                instr.LSRacc => self.a_register >> 1,
+                                instr.RORacc => std.math.rotr(u8, self.a_register, 1),
+                                else => unreachable
+                            });
+                            self.endInstruction();
+                        },
+                        instr.ASLacc, instr.ROLacc => |instruction| {
+                            if (self.a_register & 0b10000000 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
+                            self.loadRegister(.A, switch (instruction) {
+                                instr.ASLacc => self.a_register << 1,
+                                instr.ROLacc => std.math.rotl(u8, self.a_register, 1),
+                                else => unreachable
+                            });
+                            self.endInstruction();
+                        },
+                        else => return logIllegalInstruction(self.*)
                     }
                 },
                 2 => {
                     switch (self.instruction_register) {
                         // All instructions that need to read the high byte of the operand
                         instr.LDAabs, instr.STAabs, instr.LDXabs,
-                        instr.LDAabsX, instr.LDAabsY, instr.JMPabs => |instruction| {
+                        instr.LDAabsX, instr.LDAabsY, instr.JMPabs,
+                        instr.STXabs => |instruction| {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter = switch (instruction) {
                                 instr.JMPabs => blk: {
@@ -143,26 +208,28 @@ pub fn CPU(Bus: type) type {
                             };
                         },
                         instr.LDAzpg => {
-                            self.loadRegister(.A, self.data_latch);
+                            self.loadRegister(.A, self.safeBusRead(self.data_latch));
                             self.endInstruction();
                         },
-                        instr.LDAzpgX, instr.SBCzpgX, instr.RTS => {},
+                        instr.LDAzpgX, instr.SBCzpgX, instr.RTS,
+                        instr.RTI, instr.ANDzpgX => {},
                         instr.LDXzpg => {
-                            self.loadRegister(.X, self.data_latch);
+                            self.loadRegister(.X, self.safeBusRead(self.data_latch));
                             self.endInstruction();
                         },
                         instr.CMPzpg => {
-                            self.setCompareFlags(self.safeBusRead(self.data_latch));
+                            self.setCompareFlags(self.safeBusRead(self.data_latch), .A);
                             self.endInstruction();
                         },
                         instr.SEI => {
                             self.clearFlag(.irq_disable);
                             self.endInstruction();
                         },
-                        instr.STXzpg, instr.STAzpg => |instruction| {
+                        instr.STXzpg, instr.STAzpg, instr.STYzpg => |instruction| {
                             self.safeBusWrite(self.data_latch, switch (instruction) {
                                 instr.STXzpg => self.x_register,
                                 instr.STAzpg => self.a_register,
+                                instr.STYzpg => self.y_register,
                                 else => unreachable
                             });
                             self.endInstruction();
@@ -170,7 +237,7 @@ pub fn CPU(Bus: type) type {
                         instr.JSRabs => {},
                         instr.BCSrel, instr.BCCrel, instr.BEQrel,
                         instr.BNErel, instr.BVSrel, instr.BVCrel,
-                        instr.BPLrel => {
+                        instr.BPLrel, instr.BMIrel => {
                             if ((self.data_latch & 0x00FF) + self.program_counter <= 0xFF) {
                                 self.program_counter +%= self.data_latch;
                                 self.endInstruction();
@@ -178,10 +245,22 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.BITzpg => {
                             const operand = self.safeBusRead(self.data_latch);
-                            // x ^ y ^ x = y
+                            // x ^ y ^ x = y, transfer memory bits with mask
                             self.status_register |= self.status_register ^ (operand & 0b1100000) ^ self.status_register;
                             if (self.a_register == 0 and operand == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                             self.endInstruction();
+                        },
+                        instr.PHP, instr.PHA => |instruction| {
+                            self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), switch (instruction) {
+                                instr.PHP => self.status_register,
+                                instr.PHA => self.a_register,
+                                else => unreachable
+                            });
+                            self.stack_pointer -%= 1;
+                            self.endInstruction();
+                        },
+                        instr.PLA, instr.PLP => {
+                            self.stack_pointer +%= 1;
                         },
                         else => return logIllegalInstruction(self.*)
                     }
@@ -189,15 +268,19 @@ pub fn CPU(Bus: type) type {
                 3 => {
                     switch (self.instruction_register) {
                         instr.LDAabs => {
-                            self.loadRegister(.A, self.data_latch);
+                            self.loadRegister(.A, self.safeBusRead(self.data_latch));
                             self.endInstruction();
                         },
                         instr.LDXabs => {
-                            self.loadRegister(.X, self.data_latch);
+                            self.loadRegister(.X, self.safeBusRead(self.data_latch));
                             self.endInstruction();
                         },
-                        instr.STAabs => {
-                            self.safeBusWrite(self.data_latch, self.a_register);
+                        instr.STAabs, instr.STXabs => |instruction| {
+                            self.safeBusWrite(self.data_latch, switch (instruction) {
+                                instr.STAabs => self.a_register,
+                                instr.STXabs => self.x_register,
+                                else => unreachable
+                            });
                             self.endInstruction();
                         },
                         instr.LDAabsX => {
@@ -205,32 +288,38 @@ pub fn CPU(Bus: type) type {
                             if ((self.data_latch & 0x00FF) + self.x_register > 0xFF) {
                                 self.setFlag(.carry);
                             } else {
-                                self.loadRegister(.A, self.data_latch +% self.x_register);
+                                self.loadRegister(.A, self.safeBusRead(self.data_latch +% self.x_register));
                                 self.endInstruction();
                             }
                         },
                         instr.LDAabsY => {
                             // Check if loading from another page
-                            if ((self.data_latch & 0x00FF) + self.y_register > 0xFF) {
-                                self.setFlag(.carry);
-                            } else {
-                                self.loadRegister(.A, self.data_latch +% self.y_register);
+                            if ((self.data_latch & 0x00FF) + self.y_register > 0xFF) {} else {
+                                self.loadRegister(.A, self.safeBusRead(self.data_latch +% self.y_register));
                                 self.endInstruction();
                             }
                         },
-                        instr.LDAzpgX => {
-                            self.loadRegister(.A, @as(u8, @intCast(self.data_latch)) +% self.x_register);
+                        instr.LDAzpgX, instr.ANDzpgX => |instruction| {
+                            switch (instruction) {
+                                instr.LDAzpgX => self.loadRegister(.A, self.safeBusRead(@as(u8, @intCast(self.data_latch)) +% self.x_register)),
+                                instr.ANDzpgX => self.loadRegister(.A, self.a_register & self.safeBusRead(@as(u8, @intCast(self.data_latch)) +% self.x_register)),
+                                else => unreachable
+                            }
                             self.endInstruction();
                         },
                         instr.SBCzpgX => {
                             const val = self.safeBusRead(@as(u8, @intCast(self.data_latch)) +% self.x_register);
-                            const inverse_flag: i8 = @bitCast(~(self.status_register) & 0b00000001);
-                            self.a_register = @bitCast(@as(i8, @bitCast(self.a_register)) -% @as(i8, @bitCast(val)) - inverse_flag);
+                            // 6502 implements sbc as inverted adc
+                            self.addWithCarry(~val, true);
                             self.endInstruction();
                         },
                         instr.RTS => {
                             self.stack_pointer +%= 1;
                             self.data_latch = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
+                        },
+                        instr.RTI => {
+                            self.stack_pointer +%= 1;
+                            self.status_register = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
                         },
                         instr.JSRabs => {
                             self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), @as(u8, @intCast(self.program_counter >> 8)));
@@ -238,8 +327,17 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.BCSrel, instr.BCCrel, instr.BEQrel,
                         instr.BNErel, instr.BVSrel, instr.BVCrel,
-                        instr.BPLrel => {
+                        instr.BPLrel, instr.BMIrel => {
                             self.program_counter +%= self.data_latch;
+                            self.endInstruction();
+                        },
+                        instr.PLA, instr.PLP => |instruction| {
+                            const register: *u8 = switch (instruction) {
+                                instr.PLA => &self.a_register,
+                                instr.PLP => &self.status_register,
+                                else => unreachable
+                            };
+                            register.* = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
                             self.endInstruction();
                         },
                         else => return logIllegalInstruction(self.*)
@@ -248,16 +346,20 @@ pub fn CPU(Bus: type) type {
                 4 => {
                     switch (self.instruction_register) {
                         instr.LDAabsX => {
-                            self.loadRegister(.A, self.data_latch +% self.x_register);
+                            self.loadRegister(.A, self.safeBusRead(self.data_latch +% self.x_register));
                             self.endInstruction();
                         },
                         instr.LDAabsY => {
-                            self.loadRegister(.A, self.data_latch +% self.y_register);
+                            self.loadRegister(.A, self.safeBusRead(self.data_latch +% self.y_register));
                             self.endInstruction();
                         },
                         instr.RTS => {
                             self.stack_pointer +%= 1;
                             self.data_latch |= @as(u16, self.safeBusRead(0x0100 | @as(u16, self.stack_pointer))) << 8;
+                        },
+                        instr.RTI => {
+                            self.stack_pointer +%= 1;
+                            self.data_latch = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
                         },
                         instr.JSRabs => {
                             self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), @intCast(0x00FF & (self.program_counter)));
@@ -270,6 +372,12 @@ pub fn CPU(Bus: type) type {
                     switch (self.instruction_register) {
                         instr.RTS => {
                             self.program_counter = self.data_latch +% 1;
+                            self.endInstruction();
+                        },
+                        instr.RTI => {
+                            self.stack_pointer +%= 1;
+                            self.data_latch |= @as(u16, self.safeBusRead(0x0100 | @as(u16, self.stack_pointer))) << 8;
+                            self.program_counter = self.data_latch;
                             self.endInstruction();
                         },
                         instr.JSRabs => {
@@ -301,28 +409,49 @@ pub fn CPU(Bus: type) type {
             self.current_instruction_cycle = instruction_cycle_reset;
         }
 
-        inline fn loadRegister(self: *Self, register: enum {A, X, Y}, from: u16) void {
+        inline fn loadRegister(self: *Self, register: enum {A, X, Y}, with: u8) void {
             switch (register) {
                 .A => {
-                    self.a_register = self.safeBusRead(from);
+                    self.a_register = with;
                     if (self.a_register == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                     if (self.a_register & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
                 },
                 .X => {
-                    self.x_register = self.safeBusRead(from);
+                    self.x_register = with;
                     if (self.x_register == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                     if (self.x_register & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
                 },
                 .Y => {
-                    self.y_register = self.safeBusRead(from);
+                    self.y_register = with;
                     if (self.y_register == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                     if (self.y_register & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
                 }
             }
         }
 
-        fn setCompareFlags(self: *Self, value: u8) void {
-            const comp_result = @as(i16, @as(i8, @bitCast(self.a_register))) - value;
+        fn addWithCarry(self: *Self, value: u8, is_sbc: bool) void {
+            const carry = if (!is_sbc) self.status_register else ~self.status_register & 0b00000001;
+            const res = self.a_register +% value +% carry;
+
+            // Check carry flag
+            if (@as(u16, self.a_register) + value + carry > 0x00FF) self.setFlag(.carry) else self.clearFlag(.carry);
+
+            // Check overflow flag, check difference in sign bit
+            const value_sign_bit = value & 0b10000000;
+            if (self.a_register & 0b10000000 == value_sign_bit and value_sign_bit != res & 0b10000000)
+                self.setFlag(.overflow)
+            else
+                self.clearFlag(.overflow);
+
+            self.loadRegister(.A, res);
+        }
+
+        fn setCompareFlags(self: *Self, value: u8, register: enum {A, X, Y}) void {
+            const comp_result = @as(i16, @as(i8, @bitCast(switch (register) {
+                .A => self.a_register,
+                .X => self.x_register,
+                .Y => self.y_register
+            }))) - value;
             if (comp_result & 0x00FF & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
             if (comp_result < -128) self.setFlag(.carry) else self.clearFlag(.carry);
             if (comp_result == 0) self.setFlag(.zero) else self.clearFlag(.zero);
@@ -655,7 +784,7 @@ pub const StatusFlag = enum(u8) {
     carry = 1,
     zero = 1 << 1,
     irq_disable = 1 << 2,
-    decimal_mode = 1 << 3,
+    decimal = 1 << 3,
     brk_command = 1 << 4,
     overflow = 1 << 6,
     negative = 1 << 7
