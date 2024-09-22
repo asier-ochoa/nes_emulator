@@ -38,11 +38,21 @@ pub fn main() !void {
 
     rom_loader.load_ines_into_bus(data, &bus);
 
+    var continous_run = false;
+
     while (true) {
         try cpu.tick();
+
+        // Continue ticking the cpu
+        if (continous_run) {
+            std.debug.print("{any}\n", .{cpu});
+            continue;
+        }
+
         _ = try stdout.read(&buf);
         switch (buf[0]) {
             'p' => try bus.printPage(cpu.program_counter),
+            'r' => continous_run = true,
             '\n' => {},
             else => {},
         }

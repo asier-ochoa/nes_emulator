@@ -93,9 +93,21 @@ pub fn CPU(Bus: type) type {
                         instr.LDXabs, instr.LDXzpg, instr.LDAabsX,
                         instr.LDAabsY, instr.LDAzpgX, instr.CMPzpg,
                         instr.JMPabs, instr.SBCzpgX, instr.SEI,
-                        instr.STXzpg => {
+                        instr.STXzpg, instr.JSRabs, instr.BCSrel,
+                        instr.BCCrel, instr.BEQrel, instr.BNErel,
+                        instr.STAzpg, instr.BITzpg, instr.BVSrel,
+                        instr.BVCrel, instr.BPLrel => |instruction| {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
+
+                            // End when branching instruction conditions are false
+                            if (instruction == instr.BCSrel and !self.isFlagSet(.carry)) self.endInstruction();
+                            if (instruction == instr.BCCrel and self.isFlagSet(.carry)) self.endInstruction();
+                            if (instruction == instr.BEQrel and !self.isFlagSet(.zero)) self.endInstruction();
+                            if (instruction == instr.BNErel and self.isFlagSet(.zero)) self.endInstruction();
+                            if (instruction == instr.BVSrel and !self.isFlagSet(.overflow)) self.endInstruction();
+                            if (instruction == instr.BVCrel and self.isFlagSet(.overflow)) self.endInstruction();
+                            if (instruction == instr.BPLrel and self.isFlagSet(.negative)) self.endInstruction();
                         },
                         instr.LDAimm, instr.LDXimm => |instruction| {
                             switch (instruction) {
@@ -103,9 +115,15 @@ pub fn CPU(Bus: type) type {
                                 instr.LDAimm => self.loadRegister(.A, self.program_counter),
                                 else => unreachable
                             }
-                             self.program_counter += 1;
+                            self.program_counter += 1;
                             self.endInstruction();
                         },
+                        instr.SEC, instr.CLC => |instruction| {
+                            if (instruction == instr.CLC) self.clearFlag(.carry)
+                            else self.setFlag(.carry);
+                            self.endInstruction();
+                        },
+                        instr.NOP => self.endInstruction(),
                         instr.RTS => {},
                         else => return logIllegalInstruction(self.*) //TODO: log illegal instructions
                     }
@@ -141,8 +159,28 @@ pub fn CPU(Bus: type) type {
                             self.clearFlag(.irq_disable);
                             self.endInstruction();
                         },
-                        instr.STXzpg => {
-                            self.safeBusWrite(self.data_latch, self.x_register);
+                        instr.STXzpg, instr.STAzpg => |instruction| {
+                            self.safeBusWrite(self.data_latch, switch (instruction) {
+                                instr.STXzpg => self.x_register,
+                                instr.STAzpg => self.a_register,
+                                else => unreachable
+                            });
+                            self.endInstruction();
+                        },
+                        instr.JSRabs => {},
+                        instr.BCSrel, instr.BCCrel, instr.BEQrel,
+                        instr.BNErel, instr.BVSrel, instr.BVCrel,
+                        instr.BPLrel => {
+                            if ((self.data_latch & 0x00FF) + self.program_counter <= 0xFF) {
+                                self.program_counter +%= self.data_latch;
+                                self.endInstruction();
+                            }
+                        },
+                        instr.BITzpg => {
+                            const operand = self.safeBusRead(self.data_latch);
+                            // x ^ y ^ x = y
+                            self.status_register |= self.status_register ^ (operand & 0b1100000) ^ self.status_register;
+                            if (self.a_register == 0 and operand == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                             self.endInstruction();
                         },
                         else => return logIllegalInstruction(self.*)
@@ -194,6 +232,16 @@ pub fn CPU(Bus: type) type {
                             self.stack_pointer +%= 1;
                             self.data_latch = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
                         },
+                        instr.JSRabs => {
+                            self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), @as(u8, @intCast(self.program_counter >> 8)));
+                            self.stack_pointer -%= 1;
+                        },
+                        instr.BCSrel, instr.BCCrel, instr.BEQrel,
+                        instr.BNErel, instr.BVSrel, instr.BVCrel,
+                        instr.BPLrel => {
+                            self.program_counter +%= self.data_latch;
+                            self.endInstruction();
+                        },
                         else => return logIllegalInstruction(self.*)
                     }
                 },
@@ -211,12 +259,21 @@ pub fn CPU(Bus: type) type {
                             self.stack_pointer +%= 1;
                             self.data_latch |= @as(u16, self.safeBusRead(0x0100 | @as(u16, self.stack_pointer))) << 8;
                         },
+                        instr.JSRabs => {
+                            self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), @intCast(0x00FF & (self.program_counter)));
+                            self.stack_pointer -%= 1;
+                        },
                         else => return logIllegalInstruction(self.*)
                     }
                 },
                 5 => {
                     switch (self.instruction_register) {
                         instr.RTS => {
+                            self.program_counter = self.data_latch +% 1;
+                            self.endInstruction();
+                        },
+                        instr.JSRabs => {
+                            self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter = self.data_latch;
                             self.endInstruction();
                         },
@@ -286,8 +343,8 @@ pub fn CPU(Bus: type) type {
 
         pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
             try writer.print(
-                "A = 0x{X:0>2}, X = 0x{X:0>2}, Y = 0x{X:0>2}, PC = 0x{X:0>4}, SP = 0x{X:0>2}, IR = 0x{X:0>2}, S = 0b{b:0>8}",
-                .{self.a_register, self.x_register, self.y_register, self.program_counter, self.stack_pointer, self.instruction_register, self.status_register}
+                "T{d}; A = 0x{X:0>2}, X = 0x{X:0>2}, Y = 0x{X:0>2}, PC = 0x{X:0>4}, SP = 0x{X:0>2}, IR = 0x{X:0>2}, S = 0b{b:0>8}",
+                .{self.current_instruction_cycle, self.a_register, self.x_register, self.y_register, self.program_counter, self.stack_pointer, self.instruction_register, self.status_register}
             );
         }
 
@@ -303,8 +360,8 @@ pub fn CPU(Bus: type) type {
                 }
             };
             logger.err(
-                "Reached illegal instruction \"{s}\" on cycle T{}\n{any}\n",
-                .{instr_name, self.current_instruction_cycle, self}
+                "Reached illegal instruction \"{s}\"\n{any}\n",
+                .{instr_name, self}
             );
             return error.IllegalInstruction;
         }
