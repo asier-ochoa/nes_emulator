@@ -40,11 +40,25 @@ pub fn main() !void {
 
     var continous_run = false;
 
-    while (true) {
+    // Get timestamp to compute speed of execution
+    var cycles_executed: i64 = 0;
+    var start_time: ?i64 = null;
+    errdefer {
+        const end_time = std.time.microTimestamp();
+        std.debug.print("{d} cycles executed at a speed of {d:.3} Mhz in {d} ms\n", .{
+            cycles_executed,
+            // f = 1 / (avg period := time (us) / cycles)
+            1 / (@as(f64, @floatFromInt(end_time - start_time.?)) / @as(f64, @floatFromInt(cycles_executed))) ,
+            @divFloor(end_time - start_time.?, 1000)
+        });
+    }
+
+    while (true) : (cycles_executed += 1) {
         try cpu.tick();
 
         // Continue ticking the cpu
         if (continous_run) {
+            if (start_time == null) start_time = std.time.microTimestamp();
             std.debug.print("{any}\n", .{cpu});
             continue;
         }
