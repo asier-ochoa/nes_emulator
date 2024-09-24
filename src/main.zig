@@ -44,6 +44,8 @@ pub fn main() !void {
     var cycles_executed: i64 = 0;
     var start_time: ?i64 = null;
     errdefer {
+        bus.printPage(0x0000) catch unreachable;
+
         const end_time = std.time.microTimestamp();
         std.debug.print("{d} cycles executed at a speed of {d:.3} Mhz in {d} ms\n", .{
             cycles_executed,
@@ -59,7 +61,9 @@ pub fn main() !void {
         // Continue ticking the cpu
         if (continous_run) {
             if (start_time == null) start_time = std.time.microTimestamp();
-            std.debug.print("{any}\n", .{cpu});
+            if (cpu.current_instruction_cycle == 1) {
+                std.debug.print("C{} - {any}\n", .{cycles_executed + 7, cpu});
+            }
             continue;
         }
 
