@@ -18,7 +18,7 @@ pub fn CPU(Bus: type) type {
         a_register: u8 = 0,
         x_register: u8 = 0,
         y_register: u8 = 0,
-        status_register: u8 = 0,
+        status_register: u8 = 0x24,
 
         // Internal physical state
         instruction_register: u8 = 0,
@@ -287,7 +287,7 @@ pub fn CPU(Bus: type) type {
                         instr.BCSrel, instr.BCCrel, instr.BEQrel,
                         instr.BNErel, instr.BVSrel, instr.BVCrel,
                         instr.BPLrel, instr.BMIrel => {
-                            if ((self.data_latch & 0x00FF) + self.program_counter <= 0xFF) {
+                            if ((self.data_latch & 0x00FF) + (self.program_counter & 0x00FF) <= 0xFF) {
                                 self.program_counter +%= self.data_latch;
                                 self.endInstruction();
                             }
@@ -580,7 +580,7 @@ pub fn CPU(Bus: type) type {
 
         fn bit(self: *Self, operand: u8) void {
             // x ^ y ^ x = y, transfer memory bits with mask
-            self.status_register |= self.status_register ^ (operand & 0b1100000) ^ self.status_register;
+            self.status_register ^= (self.status_register ^ operand) & 0b11000000;
             if (self.a_register == 0 and operand == 0) self.setFlag(.zero) else self.clearFlag(.zero);
         }
 
@@ -634,22 +634,24 @@ pub fn CPU(Bus: type) type {
 
         pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
             try writer.print(
-                "T{d}; A = 0x{X:0>2}, X = 0x{X:0>2}, Y = 0x{X:0>2}, PC = 0x{X:0>4}, SP = 0x{X:0>2}, IR = 0x{X:0>2}, S = 0b{b:0>8}",
-                .{self.current_instruction_cycle, self.a_register, self.x_register, self.y_register, self.program_counter, self.stack_pointer, self.instruction_register, self.status_register}
+                "T{d}; A=0x{X:0>2}, X=0x{X:0>2}, Y=0x{X:0>2}, PC=0x{X:0>4}, SP=0x{X:0>2}, IR=0x{X:0>2}({s}), S=0x{X:0>2}",
+                .{
+                    self.current_instruction_cycle,
+                    self.a_register,
+                    self.x_register,
+                    self.y_register,
+                    self.program_counter -% 1   ,
+                    self.stack_pointer,
+                    self.instruction_register,
+                    instr.getPneumonic(self.instruction_register)[0..3],
+                    self.status_register
+                }
             );
         }
 
         fn logIllegalInstruction(self: Self) CPUError!void {
             // Find opcode name to dissasemble
-            const instr_name = switch (self.instruction_register) {
-                inline 0...0xFF => |opcode| comptime blk: {
-                    @setEvalBranchQuota(100000000);
-                    for (@typeInfo(instr).Struct.decls) |d| {
-                        if (@field(instr, d.name) == opcode) break :blk d.name;
-                    }
-                    break :blk "<UNKNOWN>";
-                }
-            };
+            const instr_name = instr.getPneumonic(self.instruction_register);
             logger.err(
                 "Reached illegal instruction \"{s}\"\n{any}\n",
                 .{instr_name, self}
@@ -663,6 +665,20 @@ pub const reset_vector_low_order: u16 = 0xfffc;
 
 // Instruction pneumonics
 pub const instr = struct {
+    pub fn getPneumonic(opcode: u8) []const u8 {
+        return switch (opcode) {
+            inline 0...0xFF => |opc| comptime blk: {
+                @setEvalBranchQuota(100000000);
+                for (@typeInfo(instr).Struct.decls) |d| {
+                    const field = @field(instr, d.name);
+                    if (@TypeOf(field) != comptime_int) continue;
+                    if (@field(instr, d.name) == opc) break :blk d.name;
+                }
+                break :blk "<UNKNOWN>";
+            }
+        };
+    }
+
     // Add memory to accumulator with carry
     pub const ADCimm = 0x69;
     pub const ADCzpg = 0x65;

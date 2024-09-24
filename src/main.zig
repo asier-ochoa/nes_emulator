@@ -27,6 +27,7 @@ pub fn main() !void {
     var bus = util.NesBus.init();
     var cpu = CPU.CPU(@TypeOf(bus)).init(&bus);
     cpu.program_counter = 0xC000;
+    cpu.stack_pointer = 0xFD;
 
     // Load ines rom
     const file = try std.fs.cwd().openFile("src/resources/nestest.nes", .{});
@@ -55,6 +56,7 @@ pub fn main() !void {
         });
     }
 
+    std.debug.print("C{} - {any}\n", .{cycles_executed + 7, cpu});
     while (true) : (cycles_executed += 1) {
         try cpu.tick();
 
