@@ -188,21 +188,23 @@ pub fn CPU(Bus: type) type {
                             self.endInstruction();
                         },
                         instr.LSRacc, instr.RORacc => |instruction| {
-                            if (self.a_register & 0b00000001 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
+                            const old_a = self.a_register;
                             self.loadRegister(.A, switch (instruction) {
                                 instr.LSRacc => self.a_register >> 1,
-                                instr.RORacc => std.math.rotr(u8, self.a_register, 1),
+                                instr.RORacc => (self.a_register >> 1) | (self.status_register << 7),
                                 else => unreachable
                             });
+                            if (old_a & 0b00000001 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
                             self.endInstruction();
                         },
                         instr.ASLacc, instr.ROLacc => |instruction| {
-                            if (self.a_register & 0b10000000 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
+                            const old_a = self.a_register;
                             self.loadRegister(.A, switch (instruction) {
                                 instr.ASLacc => self.a_register << 1,
-                                instr.ROLacc => std.math.rotl(u8, self.a_register, 1),
+                                instr.ROLacc => (self.a_register << 1) | (self.status_register & 0b1),
                                 else => unreachable
                             });
+                            if (old_a & 0b10000000 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
                             self.endInstruction();
                         },
                         instr.SEI => {
@@ -413,7 +415,7 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.RTI => {
                             self.stack_pointer +%= 1;
-                            self.status_register = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
+                            self.status_register ^= (self.safeBusRead(0x0100 | @as(u16, self.stack_pointer)) ^ self.status_register) & 0b11001111;
                         },
                         instr.JSRabs => {
                             self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), @as(u8, @intCast(self.program_counter >> 8)));
@@ -590,12 +592,12 @@ pub fn CPU(Bus: type) type {
             self.safeBusWrite(at, val +% 1);
         }
 
-        fn addWithCarry(self: *Self, value: u8, is_sbc: bool) void {
-            const carry = if (!is_sbc) self.status_register else ~self.status_register & 0b00000001;
+        fn addWithCarry(self: *Self, value: u8, _: bool) void {
+            const carry = self.status_register & 0b1;
             const res = self.a_register +% value +% carry;
 
-            // Check carry flag
-            if (@as(u16, self.a_register) + value + carry > 0x00FF) self.setFlag(.carry) else self.clearFlag(.carry);
+            // Check carry by looking at bit 8 in 16bit arithmetic
+            if ((@as(u16, self.a_register) + value + carry) & 0x0100 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
 
             // Check overflow flag, check difference in sign bit
             const value_sign_bit = value & 0b10000000;
