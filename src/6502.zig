@@ -92,7 +92,6 @@ pub fn CPU(Bus: type) type {
                         instr.LDAabs, instr.LDAzpg, instr.STAabs,
                         instr.LDXabs, instr.LDXzpg, instr.LDAabsX,
                         instr.LDAabsY, instr.LDAzpgX, instr.CMPzpg,
-                        instr.JMPabs, instr.SBCzpgX, instr.SEI,
                         instr.STXzpg, instr.JSRabs, instr.BCSrel,
                         instr.BCCrel, instr.BEQrel, instr.BNErel,
                         instr.STAzpg, instr.BITzpg, instr.BVSrel,
@@ -113,7 +112,8 @@ pub fn CPU(Bus: type) type {
                         instr.ROLabs, instr.INCabs, instr.DECabs,
                         instr.LDAindY, instr.STAindY, instr.ORAindY,
                         instr.ANDindY, instr.EORindY, instr.ADCindY,
-                        instr.CMPindY, instr.SBCindY, instr.JMPind => |instruction| {
+                        instr.CMPindY, instr.SBCindY, instr.JMPind,
+                        instr.JMPabs, instr.SBCzpgX => |instruction| {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
 
@@ -205,6 +205,10 @@ pub fn CPU(Bus: type) type {
                             });
                             self.endInstruction();
                         },
+                        instr.SEI => {
+                            self.setFlag(.irq_disable);
+                            self.endInstruction();
+                        },
                         else => return logIllegalInstruction(self.*)
                     }
                 },
@@ -271,10 +275,6 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.LDAzpgX, instr.SBCzpgX, instr.RTS,
                         instr.RTI, instr.ANDzpgX => {},
-                        instr.SEI => {
-                            self.clearFlag(.irq_disable);
-                            self.endInstruction();
-                        },
                         instr.STXzpg, instr.STAzpg, instr.STYzpg => |instruction| {
                             self.safeBusWrite(self.data_latch, switch (instruction) {
                                 instr.STXzpg => self.x_register,
@@ -298,7 +298,7 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.PHP, instr.PHA => |instruction| {
                             self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), switch (instruction) {
-                                instr.PHP => self.status_register,
+                                instr.PHP => self.status_register | 0b00010000,  // bit 4 is reserved so it must be set
                                 instr.PHA => self.a_register,
                                 else => unreachable
                             });
@@ -425,13 +425,12 @@ pub fn CPU(Bus: type) type {
                             self.program_counter +%= self.data_latch;
                             self.endInstruction();
                         },
-                        instr.PLA, instr.PLP => |instruction| {
-                            const register: *u8 = switch (instruction) {
-                                instr.PLA => &self.a_register,
-                                instr.PLP => &self.status_register,
-                                else => unreachable
-                            };
-                            register.* = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
+                        instr.PLA  => {
+                            self.loadRegister(.A, self.safeBusRead(0x0100 | @as(u16, self.stack_pointer)));
+                            self.endInstruction();
+                        },
+                        instr.PLP => {
+                            self.status_register ^= (self.safeBusRead(0x0100 | @as(u16, self.stack_pointer)) ^ self.status_register) & 0b11001111;
                             self.endInstruction();
                         },
                         instr.LDAindX, instr.STAindX, instr.ORAindX,
@@ -581,7 +580,7 @@ pub fn CPU(Bus: type) type {
         fn bit(self: *Self, operand: u8) void {
             // x ^ y ^ x = y, transfer memory bits with mask
             self.status_register ^= (self.status_register ^ operand) & 0b11000000;
-            if (self.a_register == 0 and operand == 0) self.setFlag(.zero) else self.clearFlag(.zero);
+            if (self.a_register & operand == 0) self.setFlag(.zero) else self.clearFlag(.zero);
         }
 
         fn incrementAt(self: *Self, at: u16, dec: bool) void {
@@ -609,14 +608,14 @@ pub fn CPU(Bus: type) type {
         }
 
         fn setCompareFlags(self: *Self, register: enum {A, X, Y}, value: u8) void {
-            const comp_result = @as(i16, @as(i8, @bitCast(switch (register) {
+            const comp = switch (register) {
                 .A => self.a_register,
                 .X => self.x_register,
                 .Y => self.y_register
-            }))) - value;
-            if (comp_result & 0x00FF & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
-            if (comp_result < -128) self.setFlag(.carry) else self.clearFlag(.carry);
-            if (comp_result == 0) self.setFlag(.zero) else self.clearFlag(.zero);
+            };
+            if (comp -% value & 0b10000000 > 0) self.setFlag(.negative) else self.clearFlag(.negative);
+            if (comp >= value) self.setFlag(.carry) else self.clearFlag(.carry);
+            if (comp == value) self.setFlag(.zero) else self.clearFlag(.zero);
         }
 
         inline fn safeBusRead(self: Self, address: u16) u8 {
