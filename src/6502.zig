@@ -238,9 +238,7 @@ pub fn CPU(Bus: type) type {
                         instr.LDAzpg, instr.LDYzpg, instr.LDXzpg,
                         instr.CMPzpg, instr.ORAzpg, instr.ANDzpg,
                         instr.EORzpg, instr.ADCzpg, instr.SBCzpg,
-                        instr.CPXzpg, instr.CPYzpg, instr.LSRzpg,
-                        instr.ASLzpg, instr.RORzpg, instr.ROLzpg,
-                        instr.INCzpg, instr.DECzpg => |instruction| {
+                        instr.CPXzpg, instr.CPYzpg => |instruction| {
                             switch (instruction) {
                                 instr.LDAzpg => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
                                 instr.LDYzpg => self.loadRegister(.Y, self.safeBusRead(self.data_latch)),
@@ -253,27 +251,30 @@ pub fn CPU(Bus: type) type {
                                 instr.SBCzpg => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
                                 instr.CPXzpg => self.setCompareFlags(.X, self.safeBusRead(self.data_latch)),
                                 instr.CPYzpg => self.setCompareFlags(.Y, self.safeBusRead(self.data_latch)),
-                                instr.LSRzpg, instr.RORzpg => {
-                                    if (self.a_register & 0b00000001 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
-                                    const val: u3 = @intCast(0x07 & self.safeBusRead(self.data_latch));
-                                    self.loadRegister(.A, if (instruction == instr.LSRzpg)
-                                        self.a_register >> val
-                                        else std.math.rotr(u8, self.a_register, val)
-                                    );
-                                },
-                                instr.ASLzpg, instr.ROLzpg => {
-                                    if (self.a_register & 0b10000000 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
-                                    const val: u3 = @intCast(0x07 & self.safeBusRead(self.data_latch));
-                                    self.loadRegister(.A, if (instruction == instr.ASLzpg)
-                                        self.a_register << val
-                                        else std.math.rotl(u8, self.a_register, val)
-                                    );
-                                },
-                                instr.INCzpg => self.incrementAt(self.data_latch, false),
-                                instr.DECzpg => self.incrementAt(self.data_latch, true),
                                 else => unreachable
                             }
                             self.endInstruction();
+                        },
+                        // These last 5 cycles because of having to write back to the bus
+                        instr.LSRzpg, instr.ASLzpg, instr.RORzpg,
+                        instr.ROLzpg => |instruction| {
+                            const value = self.safeBusRead(self.data_latch);
+                            const shifted_value = switch (instruction) {
+                                instr.LSRzpg => value >> 1,
+                                instr.ASLzpg => value << 1,
+                                instr.RORzpg => (value >> 1) | (self.status_register << 7),
+                                instr.ROLzpg => (value << 1) | (self.status_register & 0b1),
+                                else => unreachable
+                            };
+                            // Store result in high byte of data latch
+                            self.data_latch |= @as(u16, shifted_value) << 8;
+                            if (shifted_value == 0) self.setFlag(.zero) else self.clearFlag(.zero);
+                            if (shifted_value & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
+                            switch (instruction) {
+                                instr.LSRzpg, instr.RORzpg => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.ASLzpg, instr.ROLzpg => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                else => unreachable
+                            }
                         },
                         instr.LDAzpgX, instr.SBCzpgX, instr.RTS,
                         instr.RTI, instr.ANDzpgX => {},
@@ -320,7 +321,8 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.JSRabs, instr.LDAindX, instr.STAindX,
                         instr.ORAindX, instr.ANDindX, instr.EORindX,
-                        instr.ADCindX, instr.CMPindX, instr.SBCindX, => {},
+                        instr.ADCindX, instr.CMPindX, instr.SBCindX,
+                        instr.INCzpg, instr.DECzpg => {},
                         else => return logIllegalInstruction(self.*)
                     }
                 },
@@ -453,6 +455,8 @@ pub fn CPU(Bus: type) type {
                             // Fetch low byte of real address
                             self.indirect_jump = self.safeBusRead(self.data_latch);
                         },
+                        instr.LSRzpg, instr.RORzpg, instr.ASLzpg,
+                        instr.ROLzpg, instr.DECzpg, instr.INCzpg => {},
                         else => return logIllegalInstruction(self.*)
                     }
                 },
@@ -481,10 +485,11 @@ pub fn CPU(Bus: type) type {
                         instr.LDAindX, instr.STAindX, instr.ORAindX,
                         instr.ANDindX, instr.EORindX, instr.ADCindX,
                         instr.CMPindX, instr.SBCindX => {
-                            // High byte of data latch is the base address
-                            const base: u8 = @intCast((self.data_latch & 0xFF00) >> 8);
+                            // High byte of data latch is the base address. Then clear high byte
+                            const base_high = @as(u8, @intCast(self.data_latch >> 8)) +% self.x_register +% 1;
                             // High byte is replaced by address of final data
-                            self.data_latch |= @as(u16, self.safeBusRead(base +% self.x_register +% 1)) << 8;
+                            self.data_latch &= 0x00FF;
+                            self.data_latch |= @as(u16, self.safeBusRead(base_high)) << 8;
                         },
                         instr.LDAindY, instr.STAindY, instr.ORAindY,
                         instr.ANDindY, instr.EORindY, instr.ADCindY,
@@ -492,6 +497,19 @@ pub fn CPU(Bus: type) type {
                         instr.JMPind => {
                             self.indirect_jump |= @as(u16, self.safeBusRead(self.data_latch +% 1)) << 8;
                             self.program_counter = self.indirect_jump;
+                            self.endInstruction();
+                        },
+                        instr.LSRzpg, instr.RORzpg, instr.ASLzpg,
+                        instr.ROLzpg => {
+                            self.safeBusWrite(self.data_latch & 0xFF, @intCast(self.data_latch >> 8));
+                            self.endInstruction();
+                        },
+                        instr.INCzpg => {
+                            self.incrementAt(self.data_latch, false);
+                            self.endInstruction();
+                        },
+                        instr.DECzpg => {
+                            self.incrementAt(self.data_latch, true);
                             self.endInstruction();
                         },
                         else => return logIllegalInstruction(self.*)
@@ -589,7 +607,7 @@ pub fn CPU(Bus: type) type {
             const val = self.safeBusRead(at);
             if ((if (!dec) val +% 1 else val -% 1) & 0b10000000 > 0) self.setFlag(.negative) else self.clearFlag(.negative);
             if ((if (!dec) val +% 1 else val -% 1) == 0) self.setFlag(.zero) else self.clearFlag(.zero);
-            self.safeBusWrite(at, val +% 1);
+            self.safeBusWrite(at,  if (!dec) val +% 1 else val -% 1);
         }
 
         fn addWithCarry(self: *Self, value: u8, _: bool) void {
