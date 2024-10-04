@@ -84,6 +84,8 @@ pub fn CPU(Bus: type) type {
         // Master list of all instructions
         // Big switch case that uses the instruction + the current cycle to determine what to do.
         // ATTENTION: In order to reset the current instruction cycle, set it to instruction_cycle_reset
+        // ATTENTION: All reads and writes must be done through the busRead and busWrite functions such that
+        // memory map struct functions can execute their own side effects.
         fn processInstruction(self: *Self) CPUError!void {
             switch (self.current_instruction_cycle) {
                 1 => {
@@ -314,10 +316,7 @@ pub fn CPU(Bus: type) type {
                         instr.LDAindY, instr.STAindY, instr.ORAindY,
                         instr.ANDindY, instr.EORindY, instr.ADCindY,
                         instr.CMPindY, instr.SBCindY => {
-                            // Push pointer address into high byte of data latch
-                            self.data_latch <<= 8;
-                            // Fetch low byte of base address
-                            self.data_latch |= self.safeBusRead(self.data_latch >> 8);
+                            self.indirect_jump = self.safeBusRead(self.data_latch);
                         },
                         instr.JSRabs, instr.LDAindX, instr.STAindX,
                         instr.ORAindX, instr.ANDindX, instr.EORindX,
@@ -331,8 +330,7 @@ pub fn CPU(Bus: type) type {
                         instr.LDAabs, instr.LDXabs, instr.LDYabs,
                         instr.ORAabs, instr.ANDabs, instr.EORabs,
                         instr.ADCabs, instr.SBCabs, instr.CMPabs,
-                        instr.CPYabs, instr.CPXabs,
-                        instr.DECabs, instr.INCabs => |instruction| {
+                        instr.CPYabs, instr.CPXabs => |instruction| {
                             switch (instruction) {
                                 instr.LDAabs => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
                                 instr.LDXabs => self.loadRegister(.X, self.safeBusRead(self.data_latch)),
@@ -345,8 +343,6 @@ pub fn CPU(Bus: type) type {
                                 instr.CMPabs => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
                                 instr.CPYabs => self.setCompareFlags(.Y, self.safeBusRead(self.data_latch)),
                                 instr.CPXabs => self.setCompareFlags(.X, self.safeBusRead(self.data_latch)),
-                                instr.INCabs => self.incrementAt(self.data_latch, false),
-                                instr.DECabs => self.incrementAt(self.data_latch, true),
                                 else => unreachable,
                             }
                             self.endInstruction();
@@ -431,8 +427,7 @@ pub fn CPU(Bus: type) type {
                         instr.LDAindY, instr.STAindY, instr.ORAindY,
                         instr.ANDindY, instr.EORindY, instr.ADCindY,
                         instr.CMPindY, instr.SBCindY => {
-                            // Fetch high byte of base address using pointer address at high byte of data latch
-                            self.data_latch |= @as(u16, @intCast(self.safeBusRead(@as(u8, @intCast(self.data_latch >> 8)) +% 1))) << 8;
+                            self.indirect_jump |= @as(u16, self.safeBusRead(@as(u8, @intCast(self.data_latch)) +% 1)) << 8;
                         },
                         instr.JMPind => {
                             // Fetch low byte of real address
@@ -441,7 +436,7 @@ pub fn CPU(Bus: type) type {
                         instr.LSRzpg, instr.RORzpg, instr.ASLzpg,
                         instr.ROLzpg, instr.DECzpg, instr.INCzpg,
                         instr.LSRabs, instr.ASLabs, instr.RORabs,
-                        instr.ROLabs => {},
+                        instr.ROLabs, instr.INCabs, instr.DECabs => {},
                         else => return logIllegalInstruction(self.*)
                     }
                 },
@@ -476,9 +471,25 @@ pub fn CPU(Bus: type) type {
                             self.data_latch &= 0x00FF;
                             self.data_latch |= @as(u16, self.safeBusRead(base_high)) << 8;
                         },
-                        instr.LDAindY, instr.STAindY, instr.ORAindY,
+                        instr.LDAindY, instr.ORAindY,
                         instr.ANDindY, instr.EORindY, instr.ADCindY,
-                        instr.CMPindY, instr.SBCindY => {},
+                        instr.CMPindY, instr.SBCindY  => |instruction| {
+                            // Skip a cycle if data is in different page than the jump + Y
+                            if ((self.indirect_jump & 0x00FF) + self.y_register > 0xFF) {} else {
+                                const final_jump = self.indirect_jump +% self.y_register;
+                                switch (instruction) {
+                                    instr.LDAindY => self.loadRegister(.A, self.safeBusRead(final_jump)),
+                                    instr.ORAindY => self.loadRegister(.A, self.a_register | self.safeBusRead(final_jump)),
+                                    instr.ANDindY => self.loadRegister(.A, self.a_register & self.safeBusRead(final_jump)),
+                                    instr.EORindY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_jump)),
+                                    instr.ADCindY => self.addWithCarry(self.safeBusRead(final_jump), false),
+                                    instr.SBCindY => self.addWithCarry(~self.safeBusRead(final_jump), true),
+                                    instr.CMPindY => self.setCompareFlags(.A, self.safeBusRead(final_jump)),
+                                    else => unreachable
+                                }
+                                self.endInstruction();
+                            }
+                        },
                         instr.JMPind => {
                             self.indirect_jump |= @as(u16, self.safeBusRead(self.data_latch +% 1)) << 8;
                             self.program_counter = self.indirect_jump;
@@ -518,6 +529,7 @@ pub fn CPU(Bus: type) type {
                                 else => unreachable
                             }
                         },
+                        instr.INCabs, instr.DECabs, instr.STAindY => {},
                         else => return logIllegalInstruction(self.*)
                     }
                 },
@@ -540,29 +552,55 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.LDAindX, instr.ORAindX, instr.ANDindX,
                         instr.EORindX, instr.ADCindX, instr.CMPindX,
-                        instr.SBCindX, instr.LDAindY, instr.ORAindY,
-                        instr.ANDindY, instr.EORindY, instr.ADCindY,
-                        instr.CMPindY, instr.SBCindY => |instruction| {
+                        instr.SBCindX => |instruction| {
                             switch (instruction) {
-                                instr.LDAindX, instr.LDAindY => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
-                                instr.ORAindX, instr.ORAindY => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
-                                instr.ANDindX, instr.ANDindY => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
-                                instr.EORindX, instr.EORindY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
-                                instr.ADCindX, instr.ADCindY => self.addWithCarry(self.safeBusRead(self.data_latch), false),
-                                instr.SBCindX, instr.SBCindY => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
-                                instr.CMPindX, instr.CMPindY => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
+                                instr.LDAindX => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
+                                instr.ORAindX => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
+                                instr.ANDindX => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
+                                instr.EORindX => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
+                                instr.ADCindX => self.addWithCarry(self.safeBusRead(self.data_latch), false),
+                                instr.SBCindX => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
+                                instr.CMPindX => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
                                 else => unreachable
                             }
                             self.endInstruction();
                         },
-                        instr.STAindX, instr.STAindY => {
+                        instr.LDAindY, instr.ORAindY, instr.ANDindY,
+                        instr.EORindY, instr.ADCindY, instr.CMPindY,
+                        instr.SBCindY => |instruction| {
+                            const final_jump = self.indirect_jump +% self.y_register;
+                            switch (instruction) {
+                                instr.LDAindY => self.loadRegister(.A, self.safeBusRead(final_jump)),
+                                instr.ORAindY => self.loadRegister(.A, self.a_register | self.safeBusRead(final_jump)),
+                                instr.ANDindY => self.loadRegister(.A, self.a_register & self.safeBusRead(final_jump)),
+                                instr.EORindY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_jump)),
+                                instr.ADCindY => self.addWithCarry(self.safeBusRead(final_jump), false),
+                                instr.SBCindY => self.addWithCarry(~self.safeBusRead(final_jump), true),
+                                instr.CMPindY => self.setCompareFlags(.A, self.safeBusRead(final_jump)),
+                                else => unreachable
+                            }
+                            self.endInstruction();
+                        },
+                        instr.STAindX => {
                             self.safeBusWrite(self.data_latch, self.a_register);
+                            self.endInstruction();
+                        },
+                        instr.STAindY => {
+                            self.safeBusWrite(self.indirect_jump, self.a_register);
                             self.endInstruction();
                         },
                         instr.LSRabs, instr.ASLabs, instr.RORabs,
                         instr.ROLabs => {
                             // Shifted value was stored internally in indirect_jump, address is in data_latch
                             self.safeBusWrite(self.data_latch, @intCast(self.indirect_jump));
+                            self.endInstruction();
+                        },
+                        instr.INCabs, instr.DECabs => |instruction| {
+                            switch (instruction) {
+                                instr.INCabs => self.incrementAt(self.data_latch, false),
+                                instr.DECabs => self.incrementAt(self.data_latch, true),
+                                else => unreachable
+                            }
                             self.endInstruction();
                         },
                         else => return logIllegalInstruction(self.*)
