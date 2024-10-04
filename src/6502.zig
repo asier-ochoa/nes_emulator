@@ -491,7 +491,12 @@ pub fn CPU(Bus: type) type {
                             }
                         },
                         instr.JMPind => {
-                            self.indirect_jump |= @as(u16, self.safeBusRead(self.data_latch +% 1)) << 8;
+                            // Low order byte of address pointed to by instruction must wrap arounf the PAGE
+                            // Thats why i'm casting to u8 before wrapping addition.
+                            // PAY CLOSER ATTENTION TO DATASHEET PLEASE!!!
+                            self.indirect_jump |= @as(u16, self.safeBusRead(
+                                self.data_latch & 0xFF00 | (@as(u8, @intCast(self.data_latch & 0x00FF)) +% 1)
+                            )) << 8;
                             self.program_counter = self.indirect_jump;
                             self.endInstruction();
                         },
