@@ -115,7 +115,10 @@ pub fn CPU(Bus: type) type {
                         instr.ANDindY, instr.EORindY, instr.ADCindY,
                         instr.CMPindY, instr.SBCindY, instr.JMPind,
                         instr.LSRabs, instr.ASLabs, instr.RORabs,
-                        instr.ROLabs, instr.JMPabs, instr.SBCzpgX => |instruction| {
+                        instr.ROLabs, instr.JMPabs, instr.SBCzpgX,
+                        instr.LDXabsY, instr.CMPabsY, instr.SBCabsY,
+                        instr.ORAabsY, instr.ANDabsY, instr.EORabsY,
+                        instr.ADCabsY => |instruction| {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
 
@@ -220,14 +223,16 @@ pub fn CPU(Bus: type) type {
                     switch (self.instruction_register) {
                         // All instructions that need to read the high byte of the operand
                         instr.LDAabs, instr.STAabs, instr.LDXabs,
-                        instr.LDAabsX, instr.LDAabsY, instr.JMPabs,
+                        instr.LDAabsX, instr.JMPind, instr.JMPabs,
                         instr.STXabs, instr.LDYabs, instr.STYabs,
                         instr.BITabs, instr.ORAabs, instr.ANDabs,
                         instr.EORabs, instr.ADCabs, instr.SBCabs,
                         instr.CMPabs, instr.CPXabs, instr.CPYabs,
                         instr.LSRabs, instr.ASLabs, instr.RORabs,
                         instr.ROLabs, instr.DECabs, instr.INCabs,
-                        instr.JMPind => |instruction| {
+                        instr.LDAabsY, instr.LDXabsY, instr.CMPabsY,
+                        instr.ORAabsY, instr.ANDabsY, instr.EORabsY,
+                        instr.ADCabsY, instr.SBCabsY => |instruction| {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter = switch (instruction) {
                                 instr.JMPabs => blk: {
@@ -365,10 +370,25 @@ pub fn CPU(Bus: type) type {
                                 self.endInstruction();
                             }
                         },
-                        instr.LDAabsY => {
+                        instr.LDAabsY, instr.LDXabsY, instr.CMPabsY,
+                        instr.ORAabsY, instr.ANDabsY, instr.EORabsY,
+                        instr.ADCabsY, instr.SBCabsY, => |instruction| {
                             // Check if loading from another page
-                            if ((self.data_latch & 0x00FF) + self.y_register > 0xFF) {} else {
-                                self.loadRegister(.A, self.safeBusRead(self.data_latch +% self.y_register));
+                            if ((self.data_latch & 0x00FF) + self.y_register > 0xFF) {
+                                self.setFlag(.carry);
+                            } else {
+                                const final_address = self.data_latch +% self.y_register;
+                                switch (instruction) {
+                                    instr.LDAabsY => self.loadRegister(.A, self.safeBusRead(final_address)),
+                                    instr.LDXabsY => self.loadRegister(.X, self.safeBusRead(final_address)),
+                                    instr.ORAabsY => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
+                                    instr.ANDabsY => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
+                                    instr.EORabsY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
+                                    instr.ADCabsY => self.addWithCarry(self.safeBusRead(final_address), false),
+                                    instr.SBCabsY => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                    instr.CMPabsY => self.setCompareFlags(.A, self.safeBusRead(final_address)),
+                                    else => unreachable,
+                                }
                                 self.endInstruction();
                             }
                         },
@@ -446,8 +466,21 @@ pub fn CPU(Bus: type) type {
                             self.loadRegister(.A, self.safeBusRead(self.data_latch +% self.x_register));
                             self.endInstruction();
                         },
-                        instr.LDAabsY => {
-                            self.loadRegister(.A, self.safeBusRead(self.data_latch +% self.y_register));
+                        instr.LDAabsY, instr.LDXabsY, instr.CMPabsY,
+                        instr.ORAabsY, instr.ANDabsY, instr.EORabsY,
+                        instr.ADCabsY, instr.SBCabsY => |instruction| {
+                            const final_address = self.data_latch +% self.y_register;
+                            switch (instruction) {
+                                instr.LDAabsY => self.loadRegister(.A, self.safeBusRead(final_address)),
+                                instr.LDXabsY => self.loadRegister(.X, self.safeBusRead(final_address)),
+                                instr.ORAabsY => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
+                                instr.ANDabsY => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
+                                instr.EORabsY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
+                                instr.ADCabsY => self.addWithCarry(self.safeBusRead(final_address), false),
+                                instr.SBCabsY => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                instr.CMPabsY => self.setCompareFlags(.A, self.safeBusRead(final_address)),
+                                else => unreachable,
+                            }
                             self.endInstruction();
                         },
                         instr.RTS => {
