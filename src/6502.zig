@@ -1,5 +1,7 @@
 const std = @import("std");
 const util = @import("util.zig");
+const rom_loader = @import("rom_loader.zig");
+const builtin = @import("builtin");
 
 pub const logger = std.log.scoped(.CPU);
 
@@ -27,7 +29,6 @@ pub fn CPU(Bus: type) type {
 
         // Internal logical state
         current_instruction_cycle: i32 = 0, // Starts at 0, starts at instruction fetch cycle
-        is_reseting: bool = false, // Used to track when in reset procedure, needed to do things like skip 2 clock cycles on reset
         data_latch: u16 = 0, // Represents the two internal data latches the 6502 uses to store half addresses when fetching instructions
         indirect_jump: u16 = 0, // USED ONLY FOR JMPind as a latch when fetching real address from base address
 
@@ -41,13 +42,9 @@ pub fn CPU(Bus: type) type {
         }
 
         pub fn tick(self: *Self) CPUError!void {
-            if (self.is_reseting) {
-                try resetTick(self);
-            } else {
-                switch (self.current_instruction_cycle) {
-                    0 => self.fetchInstruction(),
-                    else => try self.processInstruction()
-                }
+            switch (self.current_instruction_cycle) {
+                0 => self.fetchInstruction(),
+                else => try self.processInstruction()
             }
             self.current_instruction_cycle += 1;
         }
@@ -58,22 +55,6 @@ pub fn CPU(Bus: type) type {
         pub fn reset(self: *Self) void {
             self.is_reseting = true;
             self.current_instruction_cycle = 1;
-        }
-
-        // TODO: Rewrite such that it is consistent with real 6502 behaviour, specifically the ricoh model
-        fn resetTick(self: *Self) CPUError!void {
-            switch (self.current_instruction_cycle) {
-                // Common t1 through t4 operations for all interrupt routines
-                1, 2, 3, 4 => {},
-                // Fetch low order byte then high order byte from reset vector
-                5 => self.program_counter = self.safeBusRead(reset_vector_low_order),
-                6 => {
-                    self.program_counter |= @as(u16, self.safeBusRead(reset_vector_low_order + 1)) << 8;
-                    self.is_reseting = false;
-                    self.current_instruction_cycle = 0;
-                },
-                else => return CPUError.IllegalClockState //TODO: log illegal clock cycles
-            }
         }
 
         fn fetchInstruction(self: *Self) void {
@@ -93,139 +74,139 @@ pub fn CPU(Bus: type) type {
                 1 => {
                     switch (self.instruction_register) {
                         // Read low byte of address for execution on memory data
-                        instr.LDAabs, instr.LDAzpg, instr.STAabs,
-                        instr.LDXabs, instr.LDXzpg, instr.LDAabsX,
-                        instr.LDAabsY, instr.LDAzpgX, instr.CMPzpg,
-                        instr.STXzpg, instr.JSRabs, instr.BCSrel,
-                        instr.BCCrel, instr.BEQrel, instr.BNErel,
-                        instr.STAzpg, instr.BITzpg, instr.BVSrel,
-                        instr.BVCrel, instr.BPLrel, instr.BMIrel,
-                        instr.STYzpg, instr.STXabs, instr.ANDzpgX,
-                        instr.LDAindX, instr.STAindX, instr.ORAindX,
-                        instr.ANDindX, instr.EORindX, instr.ADCindX,
-                        instr.CMPindX, instr.SBCindX, instr.LDYzpg,
-                        instr.ORAzpg, instr.ANDzpg, instr.EORzpg,
-                        instr.ADCzpg, instr.SBCzpg, instr.CPXzpg,
-                        instr.CPYzpg, instr.LSRzpg, instr.ASLzpg,
-                        instr.RORzpg, instr.ROLzpg, instr.INCzpg,
-                        instr.DECzpg, instr.LDYabs, instr.STYabs,
-                        instr.BITabs, instr.ORAabs, instr.ANDabs,
-                        instr.EORabs, instr.ADCabs, instr.SBCabs,
-                        instr.CMPabs, instr.CPXabs, instr.CPYabs,
-                        instr.INCabs, instr.DECabs, instr.STAabsX,
-                        instr.LDAindY, instr.STAindY, instr.ORAindY,
-                        instr.ANDindY, instr.EORindY, instr.ADCindY,
-                        instr.CMPindY, instr.SBCindY, instr.JMPind,
-                        instr.LSRabs, instr.ASLabs, instr.RORabs,
-                        instr.ROLabs, instr.JMPabs, instr.SBCzpgX,
-                        instr.LDXabsY, instr.CMPabsY, instr.SBCabsY,
-                        instr.ORAabsY, instr.ANDabsY, instr.EORabsY,
-                        instr.ADCabsY, instr.STAabsY, instr.STAzpgX,
-                        instr.LDYzpgX, instr.CMPzpgX, instr.ADCzpgX,
-                        instr.ORAzpgX, instr.EORzpgX, instr.STYzpgX,
-                        instr.LSRzpgX, instr.ASLzpgX, instr.RORzpgX,
-                        instr.ROLzpgX, instr.INCzpgX, instr.DECzpgX,
-                        instr.LDXzpgY, instr.STXzpgY, instr.LDYabsX,
-                        instr.ORAabsX, instr.ANDabsX, instr.EORabsX,
-                        instr.ADCabsX, instr.SBCabsX, instr.CMPabsX,
-                        instr.ASLabsX, instr.RORabsX, instr.ROLabsX,
-                        instr.LSRabsX, instr.INCabsX, instr.DECabsX => |instruction| {
+                        instr.LDAabs.op, instr.LDAzpg.op, instr.STAabs.op,
+                        instr.LDXabs.op, instr.LDXzpg.op, instr.LDAabsX.op,
+                        instr.LDAabsY.op, instr.LDAzpgX.op, instr.CMPzpg.op,
+                        instr.STXzpg.op, instr.JSRabs.op, instr.BCSrel.op,
+                        instr.BCCrel.op, instr.BEQrel.op, instr.BNErel.op,
+                        instr.STAzpg.op, instr.BITzpg.op, instr.BVSrel.op,
+                        instr.BVCrel.op, instr.BPLrel.op, instr.BMIrel.op,
+                        instr.STYzpg.op, instr.STXabs.op, instr.ANDzpgX.op,
+                        instr.LDAindX.op, instr.STAindX.op, instr.ORAindX.op,
+                        instr.ANDindX.op, instr.EORindX.op, instr.ADCindX.op,
+                        instr.CMPindX.op, instr.SBCindX.op, instr.LDYzpg.op,
+                        instr.ORAzpg.op, instr.ANDzpg.op, instr.EORzpg.op,
+                        instr.ADCzpg.op, instr.SBCzpg.op, instr.CPXzpg.op,
+                        instr.CPYzpg.op, instr.LSRzpg.op, instr.ASLzpg.op,
+                        instr.RORzpg.op, instr.ROLzpg.op, instr.INCzpg.op,
+                        instr.DECzpg.op, instr.LDYabs.op, instr.STYabs.op,
+                        instr.BITabs.op, instr.ORAabs.op, instr.ANDabs.op,
+                        instr.EORabs.op, instr.ADCabs.op, instr.SBCabs.op,
+                        instr.CMPabs.op, instr.CPXabs.op, instr.CPYabs.op,
+                        instr.INCabs.op, instr.DECabs.op, instr.STAabsX.op,
+                        instr.LDAindY.op, instr.STAindY.op, instr.ORAindY.op,
+                        instr.ANDindY.op, instr.EORindY.op, instr.ADCindY.op,
+                        instr.CMPindY.op, instr.SBCindY.op, instr.JMPind.op,
+                        instr.LSRabs.op, instr.ASLabs.op, instr.RORabs.op,
+                        instr.ROLabs.op, instr.JMPabs.op, instr.SBCzpgX.op,
+                        instr.LDXabsY.op, instr.CMPabsY.op, instr.SBCabsY.op,
+                        instr.ORAabsY.op, instr.ANDabsY.op, instr.EORabsY.op,
+                        instr.ADCabsY.op, instr.STAabsY.op, instr.STAzpgX.op,
+                        instr.LDYzpgX.op, instr.CMPzpgX.op, instr.ADCzpgX.op,
+                        instr.ORAzpgX.op, instr.EORzpgX.op, instr.STYzpgX.op,
+                        instr.LSRzpgX.op, instr.ASLzpgX.op, instr.RORzpgX.op,
+                        instr.ROLzpgX.op, instr.INCzpgX.op, instr.DECzpgX.op,
+                        instr.LDXzpgY.op, instr.STXzpgY.op, instr.LDYabsX.op,
+                        instr.ORAabsX.op, instr.ANDabsX.op, instr.EORabsX.op,
+                        instr.ADCabsX.op, instr.SBCabsX.op, instr.CMPabsX.op,
+                        instr.ASLabsX.op, instr.RORabsX.op, instr.ROLabsX.op,
+                        instr.LSRabsX.op, instr.INCabsX.op, instr.DECabsX.op => |instruction| {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
 
                             // End when branching instruction conditions are false
-                            if (instruction == instr.BCSrel and !self.isFlagSet(.carry)) self.endInstruction();
-                            if (instruction == instr.BCCrel and self.isFlagSet(.carry)) self.endInstruction();
-                            if (instruction == instr.BEQrel and !self.isFlagSet(.zero)) self.endInstruction();
-                            if (instruction == instr.BNErel and self.isFlagSet(.zero)) self.endInstruction();
-                            if (instruction == instr.BVSrel and !self.isFlagSet(.overflow)) self.endInstruction();
-                            if (instruction == instr.BVCrel and self.isFlagSet(.overflow)) self.endInstruction();
-                            if (instruction == instr.BMIrel and !self.isFlagSet(.negative)) self.endInstruction();
-                            if (instruction == instr.BPLrel and self.isFlagSet(.negative)) self.endInstruction();
+                            if (instruction == instr.BCSrel.op and !self.isFlagSet(.carry)) self.endInstruction();
+                            if (instruction == instr.BCCrel.op and self.isFlagSet(.carry)) self.endInstruction();
+                            if (instruction == instr.BEQrel.op and !self.isFlagSet(.zero)) self.endInstruction();
+                            if (instruction == instr.BNErel.op and self.isFlagSet(.zero)) self.endInstruction();
+                            if (instruction == instr.BVSrel.op and !self.isFlagSet(.overflow)) self.endInstruction();
+                            if (instruction == instr.BVCrel.op and self.isFlagSet(.overflow)) self.endInstruction();
+                            if (instruction == instr.BMIrel.op and !self.isFlagSet(.negative)) self.endInstruction();
+                            if (instruction == instr.BPLrel.op and self.isFlagSet(.negative)) self.endInstruction();
                         },
-                        instr.LDAimm, instr.LDXimm, instr.ANDimm,
-                        instr.ORAimm, instr.EORimm, instr.ADCimm,
-                        instr.LDYimm, instr.CPYimm, instr.CPXimm,
-                        instr.SBCimm, instr.CMPimm => |instruction| {
+                        instr.LDAimm.op, instr.LDXimm.op, instr.ANDimm.op,
+                        instr.ORAimm.op, instr.EORimm.op, instr.ADCimm.op,
+                        instr.LDYimm.op, instr.CPYimm.op, instr.CPXimm.op,
+                        instr.SBCimm.op, instr.CMPimm.op => |instruction| {
                             switch (instruction) {
-                                instr.LDXimm => self.loadRegister(.X, self.safeBusRead(self.program_counter)),
-                                instr.LDAimm => self.loadRegister(.A, self.safeBusRead(self.program_counter)),
-                                instr.LDYimm => self.loadRegister(.Y, self.safeBusRead(self.program_counter)),
-                                instr.ANDimm => self.loadRegister(.A, self.a_register & self.safeBusRead(self.program_counter)),
-                                instr.ORAimm => self.loadRegister(.A, self.a_register | self.safeBusRead(self.program_counter)),
-                                instr.EORimm => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.program_counter)),
-                                instr.ADCimm => self.addWithCarry(self.safeBusRead(self.program_counter), false),
-                                instr.SBCimm => self.addWithCarry(~self.safeBusRead(self.program_counter), true),
-                                instr.CPYimm => self.setCompareFlags(.Y, self.safeBusRead(self.program_counter)),
-                                instr.CPXimm => self.setCompareFlags(.X, self.safeBusRead(self.program_counter)),
-                                instr.CMPimm => self.setCompareFlags(.A, self.safeBusRead(self.program_counter)),
+                                instr.LDXimm.op => self.loadRegister(.X, self.safeBusRead(self.program_counter)),
+                                instr.LDAimm.op => self.loadRegister(.A, self.safeBusRead(self.program_counter)),
+                                instr.LDYimm.op => self.loadRegister(.Y, self.safeBusRead(self.program_counter)),
+                                instr.ANDimm.op => self.loadRegister(.A, self.a_register & self.safeBusRead(self.program_counter)),
+                                instr.ORAimm.op => self.loadRegister(.A, self.a_register | self.safeBusRead(self.program_counter)),
+                                instr.EORimm.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.program_counter)),
+                                instr.ADCimm.op => self.addWithCarry(self.safeBusRead(self.program_counter), false),
+                                instr.SBCimm.op => self.addWithCarry(~self.safeBusRead(self.program_counter), true),
+                                instr.CPYimm.op => self.setCompareFlags(.Y, self.safeBusRead(self.program_counter)),
+                                instr.CPXimm.op => self.setCompareFlags(.X, self.safeBusRead(self.program_counter)),
+                                instr.CMPimm.op => self.setCompareFlags(.A, self.safeBusRead(self.program_counter)),
                                 else => unreachable
                             }
                             self.program_counter += 1;
                             self.endInstruction();
                         },
-                        instr.SEC, instr.SED => |instruction| {
+                        instr.SEC.op, instr.SED.op => |instruction| {
                             self.setFlag(switch (instruction) {
-                                instr.SED => .decimal,
-                                instr.SEC => .carry,
+                                instr.SED.op => .decimal,
+                                instr.SEC.op => .carry,
                                 else => unreachable
                             });
                             self.endInstruction();
                         },
-                        instr.CLD, instr.CLC, instr.CLV,
-                        instr.CLI => |instruction| {
+                        instr.CLD.op, instr.CLC.op, instr.CLV.op,
+                        instr.CLI.op => |instruction| {
                             self.clearFlag(switch (instruction) {
-                                instr.CLD => .decimal,
-                                instr.CLC => .carry,
-                                instr.CLV => .overflow,
-                                instr.CLI => .irq_disable,
+                                instr.CLD.op => .decimal,
+                                instr.CLC.op => .carry,
+                                instr.CLV.op => .overflow,
+                                instr.CLI.op => .irq_disable,
                                 else => unreachable
                             });
                             self.endInstruction();
                         },
-                        instr.NOP => self.endInstruction(),
-                        instr.RTS, instr.PHP, instr.PLA,
-                        instr.PHA, instr.PLP, instr.RTI => {},
-                        instr.INY, instr.INX, instr.DEY,
-                        instr.DEX, instr.TAY, instr.TAX,
-                        instr.TXA, instr.TYA, instr.TSX,
-                        instr.TXS => |instruction| {
+                        instr.NOP.op => self.endInstruction(),
+                        instr.RTS.op, instr.PHP.op, instr.PLA.op,
+                        instr.PHA.op, instr.PLP.op, instr.RTI.op => {},
+                        instr.INY.op, instr.INX.op, instr.DEY.op,
+                        instr.DEX.op, instr.TAY.op, instr.TAX.op,
+                        instr.TXA.op, instr.TYA.op, instr.TSX.op,
+                        instr.TXS.op => |instruction| {
                             switch (instruction) {
-                                instr.INY => self.loadRegister(.Y, self.y_register +% 1),
-                                instr.INX => self.loadRegister(.X, self.x_register +% 1),
-                                instr.DEY => self.loadRegister(.Y, self.y_register -% 1),
-                                instr.DEX => self.loadRegister(.X, self.x_register -% 1),
-                                instr.TAY => self.loadRegister(.Y, self.a_register),
-                                instr.TAX => self.loadRegister(.X, self.a_register),
-                                instr.TYA => self.loadRegister(.A, self.y_register),
-                                instr.TXA => self.loadRegister(.A, self.x_register),
-                                instr.TSX => self.loadRegister(.X, self.stack_pointer),
-                                instr.TXS => self.stack_pointer = self.x_register,
+                                instr.INY.op => self.loadRegister(.Y, self.y_register +% 1),
+                                instr.INX.op => self.loadRegister(.X, self.x_register +% 1),
+                                instr.DEY.op => self.loadRegister(.Y, self.y_register -% 1),
+                                instr.DEX.op => self.loadRegister(.X, self.x_register -% 1),
+                                instr.TAY.op => self.loadRegister(.Y, self.a_register),
+                                instr.TAX.op => self.loadRegister(.X, self.a_register),
+                                instr.TYA.op => self.loadRegister(.A, self.y_register),
+                                instr.TXA.op => self.loadRegister(.A, self.x_register),
+                                instr.TSX.op => self.loadRegister(.X, self.stack_pointer),
+                                instr.TXS.op => self.stack_pointer = self.x_register,
                                 else => unreachable
                             }
                             self.endInstruction();
                         },
-                        instr.LSRacc, instr.RORacc => |instruction| {
+                        instr.LSRacc.op, instr.RORacc.op => |instruction| {
                             const old_a = self.a_register;
                             self.loadRegister(.A, switch (instruction) {
-                                instr.LSRacc => self.a_register >> 1,
-                                instr.RORacc => (self.a_register >> 1) | (self.status_register << 7),
+                                instr.LSRacc.op => self.a_register >> 1,
+                                instr.RORacc.op => (self.a_register >> 1) | (self.status_register << 7),
                                 else => unreachable
                             });
                             if (old_a & 0b00000001 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
                             self.endInstruction();
                         },
-                        instr.ASLacc, instr.ROLacc => |instruction| {
+                        instr.ASLacc.op, instr.ROLacc.op => |instruction| {
                             const old_a = self.a_register;
                             self.loadRegister(.A, switch (instruction) {
-                                instr.ASLacc => self.a_register << 1,
-                                instr.ROLacc => (self.a_register << 1) | (self.status_register & 0b1),
+                                instr.ASLacc.op => self.a_register << 1,
+                                instr.ROLacc.op => (self.a_register << 1) | (self.status_register & 0b1),
                                 else => unreachable
                             });
                             if (old_a & 0b10000000 > 0) self.setFlag(.carry) else self.clearFlag(.carry);
                             self.endInstruction();
                         },
-                        instr.SEI => {
+                        instr.SEI.op => {
                             self.setFlag(.irq_disable);
                             self.endInstruction();
                         },
@@ -235,60 +216,60 @@ pub fn CPU(Bus: type) type {
                 2 => {
                     switch (self.instruction_register) {
                         // All instructions that need to read the high byte of the operand
-                        instr.LDAabs, instr.STAabs, instr.LDXabs,
-                        instr.LDAabsX, instr.JMPind, instr.JMPabs,
-                        instr.STXabs, instr.LDYabs, instr.STYabs,
-                        instr.BITabs, instr.ORAabs, instr.ANDabs,
-                        instr.EORabs, instr.ADCabs, instr.SBCabs,
-                        instr.CMPabs, instr.CPXabs, instr.CPYabs,
-                        instr.LSRabs, instr.ASLabs, instr.RORabs,
-                        instr.ROLabs, instr.DECabs, instr.INCabs,
-                        instr.LDAabsY, instr.LDXabsY, instr.CMPabsY,
-                        instr.ORAabsY, instr.ANDabsY, instr.EORabsY,
-                        instr.ADCabsY, instr.SBCabsY, instr.STAabsY,
-                        instr.STAabsX, instr.LDYabsX, instr.ORAabsX,
-                        instr.EORabsX, instr.ANDabsX, instr.ADCabsX,
-                        instr.SBCabsX, instr.CMPabsX, instr.LSRabsX,
-                        instr.ASLabsX, instr.RORabsX, instr.ROLabsX,
-                        instr.INCabsX, instr.DECabsX => |instruction| {
+                        instr.LDAabs.op, instr.STAabs.op, instr.LDXabs.op,
+                        instr.LDAabsX.op, instr.JMPind.op, instr.JMPabs.op,
+                        instr.STXabs.op, instr.LDYabs.op, instr.STYabs.op,
+                        instr.BITabs.op, instr.ORAabs.op, instr.ANDabs.op,
+                        instr.EORabs.op, instr.ADCabs.op, instr.SBCabs.op,
+                        instr.CMPabs.op, instr.CPXabs.op, instr.CPYabs.op,
+                        instr.LSRabs.op, instr.ASLabs.op, instr.RORabs.op,
+                        instr.ROLabs.op, instr.DECabs.op, instr.INCabs.op,
+                        instr.LDAabsY.op, instr.LDXabsY.op, instr.CMPabsY.op,
+                        instr.ORAabsY.op, instr.ANDabsY.op, instr.EORabsY.op,
+                        instr.ADCabsY.op, instr.SBCabsY.op, instr.STAabsY.op,
+                        instr.STAabsX.op, instr.LDYabsX.op, instr.ORAabsX.op,
+                        instr.EORabsX.op, instr.ANDabsX.op, instr.ADCabsX.op,
+                        instr.SBCabsX.op, instr.CMPabsX.op, instr.LSRabsX.op,
+                        instr.ASLabsX.op, instr.RORabsX.op, instr.ROLabsX.op,
+                        instr.INCabsX.op, instr.DECabsX.op => |instruction| {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter = switch (instruction) {
-                                instr.JMPabs => blk: {
+                                instr.JMPabs.op => blk: {
                                     self.endInstruction();
                                     break :blk self.data_latch;
                                 },
                                 else => self.program_counter + 1
                             };
                         },
-                        instr.LDAzpg, instr.LDYzpg, instr.LDXzpg,
-                        instr.CMPzpg, instr.ORAzpg, instr.ANDzpg,
-                        instr.EORzpg, instr.ADCzpg, instr.SBCzpg,
-                        instr.CPXzpg, instr.CPYzpg => |instruction| {
+                        instr.LDAzpg.op, instr.LDYzpg.op, instr.LDXzpg.op,
+                        instr.CMPzpg.op, instr.ORAzpg.op, instr.ANDzpg.op,
+                        instr.EORzpg.op, instr.ADCzpg.op, instr.SBCzpg.op,
+                        instr.CPXzpg.op, instr.CPYzpg.op => |instruction| {
                             switch (instruction) {
-                                instr.LDAzpg => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
-                                instr.LDYzpg => self.loadRegister(.Y, self.safeBusRead(self.data_latch)),
-                                instr.LDXzpg => self.loadRegister(.X, self.safeBusRead(self.data_latch)),
-                                instr.CMPzpg => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
-                                instr.ORAzpg => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
-                                instr.ANDzpg => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
-                                instr.EORzpg => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
-                                instr.ADCzpg => self.addWithCarry(self.safeBusRead(self.data_latch), false),
-                                instr.SBCzpg => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
-                                instr.CPXzpg => self.setCompareFlags(.X, self.safeBusRead(self.data_latch)),
-                                instr.CPYzpg => self.setCompareFlags(.Y, self.safeBusRead(self.data_latch)),
+                                instr.LDAzpg.op => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
+                                instr.LDYzpg.op => self.loadRegister(.Y, self.safeBusRead(self.data_latch)),
+                                instr.LDXzpg.op => self.loadRegister(.X, self.safeBusRead(self.data_latch)),
+                                instr.CMPzpg.op => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
+                                instr.ORAzpg.op => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
+                                instr.ANDzpg.op => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
+                                instr.EORzpg.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
+                                instr.ADCzpg.op => self.addWithCarry(self.safeBusRead(self.data_latch), false),
+                                instr.SBCzpg.op => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
+                                instr.CPXzpg.op => self.setCompareFlags(.X, self.safeBusRead(self.data_latch)),
+                                instr.CPYzpg.op => self.setCompareFlags(.Y, self.safeBusRead(self.data_latch)),
                                 else => unreachable
                             }
                             self.endInstruction();
                         },
                         // These last 5 cycles because of having to write back to the bus
-                        instr.LSRzpg, instr.ASLzpg, instr.RORzpg,
-                        instr.ROLzpg => |instruction| {
+                        instr.LSRzpg.op, instr.ASLzpg.op, instr.RORzpg.op,
+                        instr.ROLzpg.op => |instruction| {
                             const value = self.safeBusRead(self.data_latch);
                             const shifted_value = switch (instruction) {
-                                instr.LSRzpg => value >> 1,
-                                instr.ASLzpg => value << 1,
-                                instr.RORzpg => (value >> 1) | (self.status_register << 7),
-                                instr.ROLzpg => (value << 1) | (self.status_register & 0b1),
+                                instr.LSRzpg.op => value >> 1,
+                                instr.ASLzpg.op => value << 1,
+                                instr.RORzpg.op => (value >> 1) | (self.status_register << 7),
+                                instr.ROLzpg.op => (value << 1) | (self.status_register & 0b1),
                                 else => unreachable
                             };
                             // Store result in high byte of data latch
@@ -296,218 +277,218 @@ pub fn CPU(Bus: type) type {
                             if (shifted_value == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                             if (shifted_value & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
                             switch (instruction) {
-                                instr.LSRzpg, instr.RORzpg => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
-                                instr.ASLzpg, instr.ROLzpg => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.LSRzpg.op, instr.RORzpg.op => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.ASLzpg.op, instr.ROLzpg.op => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
                                 else => unreachable
                             }
                         },
-                        instr.LDAzpgX, instr.SBCzpgX, instr.RTS,
-                        instr.RTI, instr.ANDzpgX => {},
-                        instr.STXzpg, instr.STAzpg, instr.STYzpg => |instruction| {
+                        instr.LDAzpgX.op, instr.SBCzpgX.op, instr.RTS.op,
+                        instr.RTI.op, instr.ANDzpgX.op => {},
+                        instr.STXzpg.op, instr.STAzpg.op, instr.STYzpg.op => |instruction| {
                             self.safeBusWrite(self.data_latch, switch (instruction) {
-                                instr.STXzpg => self.x_register,
-                                instr.STAzpg => self.a_register,
-                                instr.STYzpg => self.y_register,
+                                instr.STXzpg.op => self.x_register,
+                                instr.STAzpg.op => self.a_register,
+                                instr.STYzpg.op => self.y_register,
                                 else => unreachable
                             });
                             self.endInstruction();
                         },
-                        instr.BCSrel, instr.BCCrel, instr.BEQrel,
-                        instr.BNErel, instr.BVSrel, instr.BVCrel,
-                        instr.BPLrel, instr.BMIrel => {
+                        instr.BCSrel.op, instr.BCCrel.op, instr.BEQrel.op,
+                        instr.BNErel.op, instr.BVSrel.op, instr.BVCrel.op,
+                        instr.BPLrel.op, instr.BMIrel.op => {
                             if ((self.data_latch & 0x00FF) + (self.program_counter & 0x00FF) <= 0xFF) {
                                 self.program_counter +%= self.data_latch;
                                 self.endInstruction();
                             }
                         },
-                        instr.BITzpg => {
+                        instr.BITzpg.op => {
                             self.bit(self.safeBusRead(self.data_latch));
                             self.endInstruction();
                         },
-                        instr.PHP, instr.PHA => |instruction| {
+                        instr.PHP.op, instr.PHA.op => |instruction| {
                             self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), switch (instruction) {
-                                instr.PHP => self.status_register | 0b00010000,  // bit 4 is reserved so it must be set
-                                instr.PHA => self.a_register,
+                                instr.PHP.op => self.status_register | 0b00010000,  // bit 4 is reserved so it must be set
+                                instr.PHA.op => self.a_register,
                                 else => unreachable
                             });
                             self.stack_pointer -%= 1;
                             self.endInstruction();
                         },
-                        instr.PLA, instr.PLP => {
+                        instr.PLA.op, instr.PLP.op => {
                             self.stack_pointer +%= 1;
                         },
-                        instr.LDAindY, instr.STAindY, instr.ORAindY,
-                        instr.ANDindY, instr.EORindY, instr.ADCindY,
-                        instr.CMPindY, instr.SBCindY => {
+                        instr.LDAindY.op, instr.STAindY.op, instr.ORAindY.op,
+                        instr.ANDindY.op, instr.EORindY.op, instr.ADCindY.op,
+                        instr.CMPindY.op, instr.SBCindY.op => {
                             self.indirect_jump = self.safeBusRead(self.data_latch);
                         },
-                        instr.JSRabs, instr.LDAindX, instr.STAindX,
-                        instr.ORAindX, instr.ANDindX, instr.EORindX,
-                        instr.ADCindX, instr.CMPindX, instr.SBCindX,
-                        instr.INCzpg, instr.DECzpg, instr.LDYzpgX,
-                        instr.STYzpgX, instr.ORAzpgX, instr.EORzpgX,
-                        instr.ADCzpgX, instr.CMPzpgX, instr.STAzpgX,
-                        instr.LSRzpgX, instr.ASLzpgX, instr.RORzpgX,
-                        instr.ROLzpgX, instr.INCzpgX, instr.DECzpgX,
-                        instr.LDXzpgY, instr.STXzpgY => {},
+                        instr.JSRabs.op, instr.LDAindX.op, instr.STAindX.op,
+                        instr.ORAindX.op, instr.ANDindX.op, instr.EORindX.op,
+                        instr.ADCindX.op, instr.CMPindX.op, instr.SBCindX.op,
+                        instr.INCzpg.op, instr.DECzpg.op, instr.LDYzpgX.op,
+                        instr.STYzpgX.op, instr.ORAzpgX.op, instr.EORzpgX.op,
+                        instr.ADCzpgX.op, instr.CMPzpgX.op, instr.STAzpgX.op,
+                        instr.LSRzpgX.op, instr.ASLzpgX.op, instr.RORzpgX.op,
+                        instr.ROLzpgX.op, instr.INCzpgX.op, instr.DECzpgX.op,
+                        instr.LDXzpgY.op, instr.STXzpgY.op => {},
                         else => return logIllegalInstruction(self.*)
                     }
                 },
                 3 => {
                     switch (self.instruction_register) {
-                        instr.LDAabs, instr.LDXabs, instr.LDYabs,
-                        instr.ORAabs, instr.ANDabs, instr.EORabs,
-                        instr.ADCabs, instr.SBCabs, instr.CMPabs,
-                        instr.CPYabs, instr.CPXabs => |instruction| {
+                        instr.LDAabs.op, instr.LDXabs.op, instr.LDYabs.op,
+                        instr.ORAabs.op, instr.ANDabs.op, instr.EORabs.op,
+                        instr.ADCabs.op, instr.SBCabs.op, instr.CMPabs.op,
+                        instr.CPYabs.op, instr.CPXabs.op => |instruction| {
                             switch (instruction) {
-                                instr.LDAabs => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
-                                instr.LDXabs => self.loadRegister(.X, self.safeBusRead(self.data_latch)),
-                                instr.LDYabs => self.loadRegister(.Y, self.safeBusRead(self.data_latch)),
-                                instr.ORAabs => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
-                                instr.ANDabs => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
-                                instr.EORabs => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
-                                instr.ADCabs => self.addWithCarry(self.safeBusRead(self.data_latch), false),
-                                instr.SBCabs => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
-                                instr.CMPabs => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
-                                instr.CPYabs => self.setCompareFlags(.Y, self.safeBusRead(self.data_latch)),
-                                instr.CPXabs => self.setCompareFlags(.X, self.safeBusRead(self.data_latch)),
+                                instr.LDAabs.op => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
+                                instr.LDXabs.op => self.loadRegister(.X, self.safeBusRead(self.data_latch)),
+                                instr.LDYabs.op => self.loadRegister(.Y, self.safeBusRead(self.data_latch)),
+                                instr.ORAabs.op => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
+                                instr.ANDabs.op => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
+                                instr.EORabs.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
+                                instr.ADCabs.op => self.addWithCarry(self.safeBusRead(self.data_latch), false),
+                                instr.SBCabs.op => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
+                                instr.CMPabs.op => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
+                                instr.CPYabs.op => self.setCompareFlags(.Y, self.safeBusRead(self.data_latch)),
+                                instr.CPXabs.op => self.setCompareFlags(.X, self.safeBusRead(self.data_latch)),
                                 else => unreachable,
                             }
                             self.endInstruction();
                         },
-                        instr.STAabs, instr.STXabs, instr.STYabs => |instruction| {
+                        instr.STAabs.op, instr.STXabs.op, instr.STYabs.op => |instruction| {
                             self.safeBusWrite(self.data_latch, switch (instruction) {
-                                instr.STAabs => self.a_register,
-                                instr.STXabs => self.x_register,
-                                instr.STYabs => self.y_register,
+                                instr.STAabs.op => self.a_register,
+                                instr.STXabs.op => self.x_register,
+                                instr.STYabs.op => self.y_register,
                                 else => unreachable
                             });
                             self.endInstruction();
                         },
-                        instr.LDAabsX, instr.LDYabsX, instr.ORAabsX,
-                        instr.EORabsX, instr.ANDabsX, instr.ADCabsX,
-                        instr.SBCabsX, instr.CMPabsX => |instruction| {
+                        instr.LDAabsX.op, instr.LDYabsX.op, instr.ORAabsX.op,
+                        instr.EORabsX.op, instr.ANDabsX.op, instr.ADCabsX.op,
+                        instr.SBCabsX.op, instr.CMPabsX.op => |instruction| {
                             // Check if loading from another page
                             if ((self.data_latch & 0x00FF) + self.x_register > 0xFF) {} else {
                                 const final_address = self.data_latch +% self.x_register;
                                 switch (instruction) {
-                                    instr.LDAabsX => self.loadRegister(.A, self.safeBusRead(final_address)),
-                                    instr.LDYabsX => self.loadRegister(.Y, self.safeBusRead(final_address)),
-                                    instr.ORAabsX => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
-                                    instr.ANDabsX => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
-                                    instr.EORabsX => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                    instr.ADCabsX => self.addWithCarry(self.safeBusRead(final_address), false),
-                                    instr.SBCabsX => self.addWithCarry(~self.safeBusRead(final_address), true),
-                                    instr.CMPabsX => self.setCompareFlags(.A, self.safeBusRead(final_address)),
+                                    instr.LDAabsX.op => self.loadRegister(.A, self.safeBusRead(final_address)),
+                                    instr.LDYabsX.op => self.loadRegister(.Y, self.safeBusRead(final_address)),
+                                    instr.ORAabsX.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
+                                    instr.ANDabsX.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
+                                    instr.EORabsX.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
+                                    instr.ADCabsX.op => self.addWithCarry(self.safeBusRead(final_address), false),
+                                    instr.SBCabsX.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                    instr.CMPabsX.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                     else => unreachable
                                 }
                                 self.endInstruction();
                             }
                         },
-                        instr.LDAabsY, instr.LDXabsY, instr.CMPabsY,
-                        instr.ORAabsY, instr.ANDabsY, instr.EORabsY,
-                        instr.ADCabsY, instr.SBCabsY => |instruction| {
+                        instr.LDAabsY.op, instr.LDXabsY.op, instr.CMPabsY.op,
+                        instr.ORAabsY.op, instr.ANDabsY.op, instr.EORabsY.op,
+                        instr.ADCabsY.op, instr.SBCabsY.op => |instruction| {
                             // Check if loading from another page
                             if ((self.data_latch & 0x00FF) + self.y_register > 0xFF) {} else {
                                 const final_address = self.data_latch +% self.y_register;
                                 switch (instruction) {
-                                    instr.LDAabsY => self.loadRegister(.A, self.safeBusRead(final_address)),
-                                    instr.LDXabsY => self.loadRegister(.X, self.safeBusRead(final_address)),
-                                    instr.ORAabsY => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
-                                    instr.ANDabsY => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
-                                    instr.EORabsY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                    instr.ADCabsY => self.addWithCarry(self.safeBusRead(final_address), false),
-                                    instr.SBCabsY => self.addWithCarry(~self.safeBusRead(final_address), true),
-                                    instr.CMPabsY => self.setCompareFlags(.A, self.safeBusRead(final_address)),
+                                    instr.LDAabsY.op => self.loadRegister(.A, self.safeBusRead(final_address)),
+                                    instr.LDXabsY.op => self.loadRegister(.X, self.safeBusRead(final_address)),
+                                    instr.ORAabsY.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
+                                    instr.ANDabsY.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
+                                    instr.EORabsY.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
+                                    instr.ADCabsY.op => self.addWithCarry(self.safeBusRead(final_address), false),
+                                    instr.SBCabsY.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                    instr.CMPabsY.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                     else => unreachable,
                                 }
                                 self.endInstruction();
                             }
                         },
-                        instr.BITabs => {
+                        instr.BITabs.op => {
                             self.bit(self.safeBusRead(self.data_latch));
                             self.endInstruction();
                         },
-                        instr.LDAzpgX, instr.LDYzpgX, instr.CMPzpgX,
-                        instr.ORAzpgX, instr.ANDzpgX, instr.EORzpgX,
-                        instr.ADCzpgX, instr.SBCzpgX, instr.STYzpgX,
-                        instr.STAzpgX => |instruction| {
+                        instr.LDAzpgX.op, instr.LDYzpgX.op, instr.CMPzpgX.op,
+                        instr.ORAzpgX.op, instr.ANDzpgX.op, instr.EORzpgX.op,
+                        instr.ADCzpgX.op, instr.SBCzpgX.op, instr.STYzpgX.op,
+                        instr.STAzpgX.op => |instruction| {
                             const final_address = @as(u8, @intCast(self.data_latch)) +% self.x_register;
                             switch (instruction) {
-                                instr.LDAzpgX => self.loadRegister(.A, self.safeBusRead(final_address)),
-                                instr.LDYzpgX => self.loadRegister(.Y, self.safeBusRead(final_address)),
-                                instr.ANDzpgX => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
-                                instr.ORAzpgX => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
-                                instr.EORzpgX => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                instr.SBCzpgX => self.addWithCarry(~self.safeBusRead(final_address), true),
-                                instr.ADCzpgX => self.addWithCarry(self.safeBusRead(final_address), false),
-                                instr.STYzpgX => self.safeBusWrite(final_address, self.y_register),
-                                instr.STAzpgX => self.safeBusWrite(final_address, self.a_register),
-                                instr.CMPzpgX => self.setCompareFlags(.A, self.safeBusRead(final_address)),
+                                instr.LDAzpgX.op => self.loadRegister(.A, self.safeBusRead(final_address)),
+                                instr.LDYzpgX.op => self.loadRegister(.Y, self.safeBusRead(final_address)),
+                                instr.ANDzpgX.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
+                                instr.ORAzpgX.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
+                                instr.EORzpgX.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
+                                instr.SBCzpgX.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                instr.ADCzpgX.op => self.addWithCarry(self.safeBusRead(final_address), false),
+                                instr.STYzpgX.op => self.safeBusWrite(final_address, self.y_register),
+                                instr.STAzpgX.op => self.safeBusWrite(final_address, self.a_register),
+                                instr.CMPzpgX.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                 else => unreachable
                             }
                             self.endInstruction();
                         },
-                        instr.LDXzpgY, instr.STXzpgY => |instruction| {
+                        instr.LDXzpgY.op, instr.STXzpgY.op => |instruction| {
                             const final_address = @as(u8, @intCast(self.data_latch)) +% self.y_register;
                             switch (instruction) {
-                                instr.LDXzpgY => self.loadRegister(.X, self.safeBusRead(final_address)),
-                                instr.STXzpgY => self.safeBusWrite(final_address, self.x_register),
+                                instr.LDXzpgY.op => self.loadRegister(.X, self.safeBusRead(final_address)),
+                                instr.STXzpgY.op => self.safeBusWrite(final_address, self.x_register),
                                 else => unreachable,
                             }
                             self.endInstruction();
                         },
-                        instr.RTS => {
+                        instr.RTS.op => {
                             self.stack_pointer +%= 1;
                             self.data_latch = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
                         },
-                        instr.RTI => {
+                        instr.RTI.op => {
                             self.stack_pointer +%= 1;
                             self.status_register ^= (self.safeBusRead(0x0100 | @as(u16, self.stack_pointer)) ^ self.status_register) & 0b11001111;
                         },
-                        instr.JSRabs => {
+                        instr.JSRabs.op => {
                             self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), @as(u8, @intCast(self.program_counter >> 8)));
                             self.stack_pointer -%= 1;
                         },
-                        instr.BCSrel, instr.BCCrel, instr.BEQrel,
-                        instr.BNErel, instr.BVSrel, instr.BVCrel,
-                        instr.BPLrel, instr.BMIrel => {
+                        instr.BCSrel.op, instr.BCCrel.op, instr.BEQrel.op,
+                        instr.BNErel.op, instr.BVSrel.op, instr.BVCrel.op,
+                        instr.BPLrel.op, instr.BMIrel.op => {
                             self.program_counter +%= self.data_latch;
                             self.endInstruction();
                         },
-                        instr.PLA  => {
+                        instr.PLA.op  => {
                             self.loadRegister(.A, self.safeBusRead(0x0100 | @as(u16, self.stack_pointer)));
                             self.endInstruction();
                         },
-                        instr.PLP => {
+                        instr.PLP.op => {
                             self.status_register ^= (self.safeBusRead(0x0100 | @as(u16, self.stack_pointer)) ^ self.status_register) & 0b11001111;
                             self.endInstruction();
                         },
-                        instr.LDAindX, instr.STAindX, instr.ORAindX,
-                        instr.ANDindX, instr.EORindX, instr.ADCindX,
-                        instr.CMPindX, instr.SBCindX => {
+                        instr.LDAindX.op, instr.STAindX.op, instr.ORAindX.op,
+                        instr.ANDindX.op, instr.EORindX.op, instr.ADCindX.op,
+                        instr.CMPindX.op, instr.SBCindX.op => {
                             // Push base address into high byte of data latch
                             self.data_latch <<= 8;
                             // Fetch low byte of address only within the zeropage
                             self.data_latch |= self.safeBusRead(@as(u8, @intCast(self.data_latch >> 8)) +% self.x_register);
                         },
-                        instr.LDAindY, instr.STAindY, instr.ORAindY,
-                        instr.ANDindY, instr.EORindY, instr.ADCindY,
-                        instr.CMPindY, instr.SBCindY => {
+                        instr.LDAindY.op, instr.STAindY.op, instr.ORAindY.op,
+                        instr.ANDindY.op, instr.EORindY.op, instr.ADCindY.op,
+                        instr.CMPindY.op, instr.SBCindY.op => {
                             self.indirect_jump |= @as(u16, self.safeBusRead(@as(u8, @intCast(self.data_latch)) +% 1)) << 8;
                         },
-                        instr.JMPind => {
+                        instr.JMPind.op => {
                             // Fetch low byte of real address
                             self.indirect_jump = self.safeBusRead(self.data_latch);
                         },
-                        instr.LSRzpgX, instr.ASLzpgX, instr.RORzpgX,
-                        instr.ROLzpgX => |instruction| {
+                        instr.LSRzpgX.op, instr.ASLzpgX.op, instr.RORzpgX.op,
+                        instr.ROLzpgX.op => |instruction| {
                             const value = self.safeBusRead(@as(u8, @intCast(self.data_latch)) +% self.x_register);
                             const shifted_value = switch (instruction) {
-                                instr.LSRzpgX => value >> 1,
-                                instr.ASLzpgX => value << 1,
-                                instr.RORzpgX => (value >> 1) | (self.status_register << 7),
-                                instr.ROLzpgX => (value << 1) | (self.status_register & 0b1),
+                                instr.LSRzpgX.op => value >> 1,
+                                instr.ASLzpgX.op => value << 1,
+                                instr.RORzpgX.op => (value >> 1) | (self.status_register << 7),
+                                instr.ROLzpgX.op => (value << 1) | (self.status_register & 0b1),
                                 else => unreachable
                             };
                             // Store result in high byte of data latch
@@ -515,107 +496,107 @@ pub fn CPU(Bus: type) type {
                             if (shifted_value == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                             if (shifted_value & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
                             switch (instruction) {
-                                instr.LSRzpgX, instr.RORzpgX => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
-                                instr.ASLzpgX, instr.ROLzpgX => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.LSRzpgX.op, instr.RORzpgX.op => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.ASLzpgX.op, instr.ROLzpgX.op => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
                                 else => unreachable
                             }
                         },
-                        instr.LSRzpg, instr.RORzpg, instr.ASLzpg,
-                        instr.ROLzpg, instr.DECzpg, instr.INCzpg,
-                        instr.LSRabs, instr.ASLabs, instr.RORabs,
-                        instr.ROLabs, instr.INCabs, instr.DECabs,
-                        instr.STAabsY, instr.STAabsX, instr.DECzpgX,
-                        instr.INCzpgX, instr.LSRabsX, instr.ASLabsX,
-                        instr.RORabsX, instr.ROLabsX, instr.DECabsX,
-                        instr.INCabsX => {},
+                        instr.LSRzpg.op, instr.RORzpg.op, instr.ASLzpg.op,
+                        instr.ROLzpg.op, instr.DECzpg.op, instr.INCzpg.op,
+                        instr.LSRabs.op, instr.ASLabs.op, instr.RORabs.op,
+                        instr.ROLabs.op, instr.INCabs.op, instr.DECabs.op,
+                        instr.STAabsY.op, instr.STAabsX.op, instr.DECzpgX.op,
+                        instr.INCzpgX.op, instr.LSRabsX.op, instr.ASLabsX.op,
+                        instr.RORabsX.op, instr.ROLabsX.op, instr.DECabsX.op,
+                        instr.INCabsX.op => {},
                         else => return logIllegalInstruction(self.*)
                     }
                 },
                 4 => {
                     switch (self.instruction_register) {
-                        instr.LDAabsX, instr.LDYabsX, instr.ORAabsX,
-                        instr.EORabsX, instr.ANDabsX, instr.ADCabsX,
-                        instr.SBCabsX, instr.CMPabsX => |instruction| {
+                        instr.LDAabsX.op, instr.LDYabsX.op, instr.ORAabsX.op,
+                        instr.EORabsX.op, instr.ANDabsX.op, instr.ADCabsX.op,
+                        instr.SBCabsX.op, instr.CMPabsX.op => |instruction| {
                             const final_address = self.data_latch +% self.x_register;
                             switch (instruction) {
-                                instr.LDAabsX => self.loadRegister(.A, self.safeBusRead(final_address)),
-                                instr.LDYabsX => self.loadRegister(.Y, self.safeBusRead(final_address)),
-                                instr.ORAabsX => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
-                                instr.ANDabsX => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
-                                instr.EORabsX => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                instr.ADCabsX => self.addWithCarry(self.safeBusRead(final_address), false),
-                                instr.SBCabsX => self.addWithCarry(~self.safeBusRead(final_address), true),
-                                instr.CMPabsX => self.setCompareFlags(.A, self.safeBusRead(final_address)),
+                                instr.LDAabsX.op => self.loadRegister(.A, self.safeBusRead(final_address)),
+                                instr.LDYabsX.op => self.loadRegister(.Y, self.safeBusRead(final_address)),
+                                instr.ORAabsX.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
+                                instr.ANDabsX.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
+                                instr.EORabsX.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
+                                instr.ADCabsX.op => self.addWithCarry(self.safeBusRead(final_address), false),
+                                instr.SBCabsX.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                instr.CMPabsX.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                 else => unreachable
                             }
                             self.endInstruction();
                         },
-                        instr.LDAabsY, instr.LDXabsY, instr.CMPabsY,
-                        instr.ORAabsY, instr.ANDabsY, instr.EORabsY,
-                        instr.ADCabsY, instr.SBCabsY => |instruction| {
+                        instr.LDAabsY.op, instr.LDXabsY.op, instr.CMPabsY.op,
+                        instr.ORAabsY.op, instr.ANDabsY.op, instr.EORabsY.op,
+                        instr.ADCabsY.op, instr.SBCabsY.op => |instruction| {
                             const final_address = self.data_latch +% self.y_register;
                             switch (instruction) {
-                                instr.LDAabsY => self.loadRegister(.A, self.safeBusRead(final_address)),
-                                instr.LDXabsY => self.loadRegister(.X, self.safeBusRead(final_address)),
-                                instr.ORAabsY => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
-                                instr.ANDabsY => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
-                                instr.EORabsY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                instr.ADCabsY => self.addWithCarry(self.safeBusRead(final_address), false),
-                                instr.SBCabsY => self.addWithCarry(~self.safeBusRead(final_address), true),
-                                instr.CMPabsY => self.setCompareFlags(.A, self.safeBusRead(final_address)),
+                                instr.LDAabsY.op => self.loadRegister(.A, self.safeBusRead(final_address)),
+                                instr.LDXabsY.op => self.loadRegister(.X, self.safeBusRead(final_address)),
+                                instr.ORAabsY.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
+                                instr.ANDabsY.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
+                                instr.EORabsY.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
+                                instr.ADCabsY.op => self.addWithCarry(self.safeBusRead(final_address), false),
+                                instr.SBCabsY.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                instr.CMPabsY.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                 else => unreachable,
                             }
                             self.endInstruction();
                         },
-                        instr.RTS => {
+                        instr.RTS.op => {
                             self.stack_pointer +%= 1;
                             self.data_latch |= @as(u16, self.safeBusRead(0x0100 | @as(u16, self.stack_pointer))) << 8;
                         },
-                        instr.RTI => {
+                        instr.RTI.op => {
                             self.stack_pointer +%= 1;
                             self.data_latch = self.safeBusRead(0x0100 | @as(u16, self.stack_pointer));
                         },
-                        instr.JSRabs => {
+                        instr.JSRabs.op => {
                             self.safeBusWrite(0x0100 | @as(u16, self.stack_pointer), @intCast(0x00FF & (self.program_counter)));
                             self.stack_pointer -%= 1;
                         },
-                        instr.LDAindX, instr.STAindX, instr.ORAindX,
-                        instr.ANDindX, instr.EORindX, instr.ADCindX,
-                        instr.CMPindX, instr.SBCindX => {
+                        instr.LDAindX.op, instr.STAindX.op, instr.ORAindX.op,
+                        instr.ANDindX.op, instr.EORindX.op, instr.ADCindX.op,
+                        instr.CMPindX.op, instr.SBCindX.op => {
                             // High byte of data latch is the base address. Then clear high byte
                             const base_high = @as(u8, @intCast(self.data_latch >> 8)) +% self.x_register +% 1;
                             // High byte is replaced by address of final data
                             self.data_latch &= 0x00FF;
                             self.data_latch |= @as(u16, self.safeBusRead(base_high)) << 8;
                         },
-                        instr.STAabsX, instr.STAabsY => |instruction| {
+                        instr.STAabsX.op, instr.STAabsY.op => |instruction| {
                             self.safeBusWrite(self.data_latch +% switch (instruction) {
-                                instr.STAabsX => self.x_register,
-                                instr.STAabsY => self.y_register,
+                                instr.STAabsX.op => self.x_register,
+                                instr.STAabsY.op => self.y_register,
                                 else => unreachable
                             }, self.a_register);
                             self.endInstruction();
                         },
-                        instr.LDAindY, instr.ORAindY,
-                        instr.ANDindY, instr.EORindY, instr.ADCindY,
-                        instr.CMPindY, instr.SBCindY  => |instruction| {
+                        instr.LDAindY.op, instr.ORAindY.op,
+                        instr.ANDindY.op, instr.EORindY.op, instr.ADCindY.op,
+                        instr.CMPindY.op, instr.SBCindY.op  => |instruction| {
                             // Skip a cycle if data is in different page than the jump + Y
                             if ((self.indirect_jump & 0x00FF) + self.y_register > 0xFF) {} else {
                                 const final_jump = self.indirect_jump +% self.y_register;
                                 switch (instruction) {
-                                    instr.LDAindY => self.loadRegister(.A, self.safeBusRead(final_jump)),
-                                    instr.ORAindY => self.loadRegister(.A, self.a_register | self.safeBusRead(final_jump)),
-                                    instr.ANDindY => self.loadRegister(.A, self.a_register & self.safeBusRead(final_jump)),
-                                    instr.EORindY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_jump)),
-                                    instr.ADCindY => self.addWithCarry(self.safeBusRead(final_jump), false),
-                                    instr.SBCindY => self.addWithCarry(~self.safeBusRead(final_jump), true),
-                                    instr.CMPindY => self.setCompareFlags(.A, self.safeBusRead(final_jump)),
+                                    instr.LDAindY.op => self.loadRegister(.A, self.safeBusRead(final_jump)),
+                                    instr.ORAindY.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_jump)),
+                                    instr.ANDindY.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_jump)),
+                                    instr.EORindY.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_jump)),
+                                    instr.ADCindY.op => self.addWithCarry(self.safeBusRead(final_jump), false),
+                                    instr.SBCindY.op => self.addWithCarry(~self.safeBusRead(final_jump), true),
+                                    instr.CMPindY.op => self.setCompareFlags(.A, self.safeBusRead(final_jump)),
                                     else => unreachable
                                 }
                                 self.endInstruction();
                             }
                         },
-                        instr.JMPind => {
+                        instr.JMPind.op => {
                             // Low order byte of address pointed to by instruction must wrap arounf the PAGE
                             // Thats why i'm casting to u8 before wrapping addition.
                             // PAY CLOSER ATTENTION TO DATASHEET PLEASE!!!
@@ -625,27 +606,27 @@ pub fn CPU(Bus: type) type {
                             self.program_counter = self.indirect_jump;
                             self.endInstruction();
                         },
-                        instr.LSRzpg, instr.RORzpg, instr.ASLzpg,
-                        instr.ROLzpg => {
+                        instr.LSRzpg.op, instr.RORzpg.op, instr.ASLzpg.op,
+                        instr.ROLzpg.op => {
                             self.safeBusWrite(self.data_latch & 0xFF, @intCast(self.data_latch >> 8));
                             self.endInstruction();
                         },
-                        instr.INCzpg => {
+                        instr.INCzpg.op => {
                             self.incrementAt(self.data_latch, false);
                             self.endInstruction();
                         },
-                        instr.DECzpg => {
+                        instr.DECzpg.op => {
                             self.incrementAt(self.data_latch, true);
                             self.endInstruction();
                         },
-                        instr.LSRabs, instr.ASLabs, instr.RORabs,
-                        instr.ROLabs => |instruction| {
+                        instr.LSRabs.op, instr.ASLabs.op, instr.RORabs.op,
+                        instr.ROLabs.op => |instruction| {
                             const value = self.safeBusRead(self.data_latch);
                             const shifted_value = switch (instruction) {
-                                instr.LSRabs => value >> 1,
-                                instr.ASLabs => value << 1,
-                                instr.RORabs => (value >> 1) | (self.status_register << 7),
-                                instr.ROLabs => (value << 1) | (self.status_register & 0b1),
+                                instr.LSRabs.op => value >> 1,
+                                instr.ASLabs.op => value << 1,
+                                instr.RORabs.op => (value >> 1) | (self.status_register << 7),
+                                instr.ROLabs.op => (value << 1) | (self.status_register & 0b1),
                                 else => unreachable
                             };
                             // Store result in indirect_jump (terrible for readability LMAO)
@@ -653,107 +634,107 @@ pub fn CPU(Bus: type) type {
                             if (shifted_value == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                             if (shifted_value & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
                             switch (instruction) {
-                                instr.LSRabs, instr.RORabs => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
-                                instr.ASLabs, instr.ROLabs => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.LSRabs.op, instr.RORabs.op => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.ASLabs.op, instr.ROLabs.op => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
                                 else => unreachable
                             }
                         },
-                        instr.INCabs, instr.DECabs, instr.STAindY,
-                        instr.LSRzpgX, instr.ASLzpgX, instr.RORzpgX,
-                        instr.ROLzpgX, instr.DECzpgX, instr.INCzpgX,
-                        instr.LSRabsX, instr.ASLabsX, instr.RORabsX,
-                        instr.ROLabsX, instr.INCabsX, instr.DECabsX => {},
+                        instr.INCabs.op, instr.DECabs.op, instr.STAindY.op,
+                        instr.LSRzpgX.op, instr.ASLzpgX.op, instr.RORzpgX.op,
+                        instr.ROLzpgX.op, instr.DECzpgX.op, instr.INCzpgX.op,
+                        instr.LSRabsX.op, instr.ASLabsX.op, instr.RORabsX.op,
+                        instr.ROLabsX.op, instr.INCabsX.op, instr.DECabsX.op => {},
                         else => return logIllegalInstruction(self.*)
                     }
                 },
                 5 => {
                     switch (self.instruction_register) {
-                        instr.RTS => {
+                        instr.RTS.op => {
                             self.program_counter = self.data_latch +% 1;
                             self.endInstruction();
                         },
-                        instr.RTI => {
+                        instr.RTI.op => {
                             self.stack_pointer +%= 1;
                             self.data_latch |= @as(u16, self.safeBusRead(0x0100 | @as(u16, self.stack_pointer))) << 8;
                             self.program_counter = self.data_latch;
                             self.endInstruction();
                         },
-                        instr.JSRabs => {
+                        instr.JSRabs.op => {
                             self.data_latch |= @as(u16, self.safeBusRead(self.program_counter)) << 8;
                             self.program_counter = self.data_latch;
                             self.endInstruction();
                         },
-                        instr.LDAindX, instr.ORAindX, instr.ANDindX,
-                        instr.EORindX, instr.ADCindX, instr.CMPindX,
-                        instr.SBCindX => |instruction| {
+                        instr.LDAindX.op, instr.ORAindX.op, instr.ANDindX.op,
+                        instr.EORindX.op, instr.ADCindX.op, instr.CMPindX.op,
+                        instr.SBCindX.op => |instruction| {
                             switch (instruction) {
-                                instr.LDAindX => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
-                                instr.ORAindX => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
-                                instr.ANDindX => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
-                                instr.EORindX => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
-                                instr.ADCindX => self.addWithCarry(self.safeBusRead(self.data_latch), false),
-                                instr.SBCindX => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
-                                instr.CMPindX => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
+                                instr.LDAindX.op => self.loadRegister(.A, self.safeBusRead(self.data_latch)),
+                                instr.ORAindX.op => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
+                                instr.ANDindX.op => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
+                                instr.EORindX.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
+                                instr.ADCindX.op => self.addWithCarry(self.safeBusRead(self.data_latch), false),
+                                instr.SBCindX.op => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
+                                instr.CMPindX.op => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
                                 else => unreachable
                             }
                             self.endInstruction();
                         },
-                        instr.LDAindY, instr.ORAindY, instr.ANDindY,
-                        instr.EORindY, instr.ADCindY, instr.CMPindY,
-                        instr.SBCindY => |instruction| {
+                        instr.LDAindY.op, instr.ORAindY.op, instr.ANDindY.op,
+                        instr.EORindY.op, instr.ADCindY.op, instr.CMPindY.op,
+                        instr.SBCindY.op => |instruction| {
                             const final_jump = self.indirect_jump +% self.y_register;
                             switch (instruction) {
-                                instr.LDAindY => self.loadRegister(.A, self.safeBusRead(final_jump)),
-                                instr.ORAindY => self.loadRegister(.A, self.a_register | self.safeBusRead(final_jump)),
-                                instr.ANDindY => self.loadRegister(.A, self.a_register & self.safeBusRead(final_jump)),
-                                instr.EORindY => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_jump)),
-                                instr.ADCindY => self.addWithCarry(self.safeBusRead(final_jump), false),
-                                instr.SBCindY => self.addWithCarry(~self.safeBusRead(final_jump), true),
-                                instr.CMPindY => self.setCompareFlags(.A, self.safeBusRead(final_jump)),
+                                instr.LDAindY.op => self.loadRegister(.A, self.safeBusRead(final_jump)),
+                                instr.ORAindY.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_jump)),
+                                instr.ANDindY.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_jump)),
+                                instr.EORindY.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_jump)),
+                                instr.ADCindY.op => self.addWithCarry(self.safeBusRead(final_jump), false),
+                                instr.SBCindY.op => self.addWithCarry(~self.safeBusRead(final_jump), true),
+                                instr.CMPindY.op => self.setCompareFlags(.A, self.safeBusRead(final_jump)),
                                 else => unreachable
                             }
                             self.endInstruction();
                         },
-                        instr.STAindX => {
+                        instr.STAindX.op => {
                             self.safeBusWrite(self.data_latch, self.a_register);
                             self.endInstruction();
                         },
-                        instr.STAindY => {
+                        instr.STAindY.op => {
                             self.safeBusWrite(self.indirect_jump, self.a_register);
                             self.endInstruction();
                         },
-                        instr.LSRabs, instr.ASLabs, instr.RORabs,
-                        instr.ROLabs => {
+                        instr.LSRabs.op, instr.ASLabs.op, instr.RORabs.op,
+                        instr.ROLabs.op => {
                             // Shifted value was stored internally in indirect_jump, address is in data_latch
                             self.safeBusWrite(self.data_latch, @intCast(self.indirect_jump));
                             self.endInstruction();
                         },
-                        instr.LSRzpgX, instr.ASLzpgX, instr.RORzpgX,
-                        instr.ROLzpgX => {
+                        instr.LSRzpgX.op, instr.ASLzpgX.op, instr.RORzpgX.op,
+                        instr.ROLzpgX.op => {
                             // Value is stored in high byte of data latch, address in low byte
                             self.safeBusWrite(@as(u8, @intCast(self.data_latch & 0x00FF)) +% self.x_register, @intCast(self.data_latch >> 8));
                             self.endInstruction();
                         },
                         // TODO: This is innacurate because it reads and writes in the same cycle
-                        instr.INCabs, instr.DECabs, instr.DECzpgX,
-                        instr.INCzpgX => |instruction| {
+                        instr.INCabs.op, instr.DECabs.op, instr.DECzpgX.op,
+                        instr.INCzpgX.op => |instruction| {
                             switch (instruction) {
-                                instr.INCabs => self.incrementAt(self.data_latch, false),
-                                instr.DECabs => self.incrementAt(self.data_latch, true),
-                                instr.INCzpgX => self.incrementAt(@as(u8, @intCast(self.data_latch)) +% self.x_register, false),
-                                instr.DECzpgX => self.incrementAt(@as(u8, @intCast(self.data_latch)) +% self.x_register, true),
+                                instr.INCabs.op => self.incrementAt(self.data_latch, false),
+                                instr.DECabs.op => self.incrementAt(self.data_latch, true),
+                                instr.INCzpgX.op => self.incrementAt(@as(u8, @intCast(self.data_latch)) +% self.x_register, false),
+                                instr.DECzpgX.op => self.incrementAt(@as(u8, @intCast(self.data_latch)) +% self.x_register, true),
                                 else => unreachable
                             }
                             self.endInstruction();
                         },
-                        instr.LSRabsX, instr.ASLabsX, instr.RORabsX,
-                        instr.ROLabsX => |instruction| {
+                        instr.LSRabsX.op, instr.ASLabsX.op, instr.RORabsX.op,
+                        instr.ROLabsX.op => |instruction| {
                             const value = self.safeBusRead(self.data_latch +% self.x_register);
                             const shifted_value = switch (instruction) {
-                                instr.LSRabsX => value >> 1,
-                                instr.ASLabsX => value << 1,
-                                instr.RORabsX => (value >> 1) | (self.status_register << 7),
-                                instr.ROLabsX => (value << 1) | (self.status_register & 0b1),
+                                instr.LSRabsX.op => value >> 1,
+                                instr.ASLabsX.op => value << 1,
+                                instr.RORabsX.op => (value >> 1) | (self.status_register << 7),
+                                instr.ROLabsX.op => (value << 1) | (self.status_register & 0b1),
                                 else => unreachable
                             };
                             // Store result in indirect_jump (terrible for readability LMAO)
@@ -761,25 +742,25 @@ pub fn CPU(Bus: type) type {
                             if (shifted_value == 0) self.setFlag(.zero) else self.clearFlag(.zero);
                             if (shifted_value & 0b10000000 != 0) self.setFlag(.negative) else self.clearFlag(.negative);
                             switch (instruction) {
-                                instr.LSRabsX, instr.RORabsX => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
-                                instr.ASLabsX, instr.ROLabsX => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.LSRabsX.op, instr.RORabsX.op => if (value & 0b00000001 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
+                                instr.ASLabsX.op, instr.ROLabsX.op => if (value & 0b10000000 != 0) self.setFlag(.carry) else self.clearFlag(.carry),
                                 else => unreachable
                             }
                         },
-                        instr.DECabsX, instr.INCabsX => {},
+                        instr.DECabsX.op, instr.INCabsX.op => {},
                         else => return logIllegalInstruction(self.*)
                     }
                 },
                 6 => {
                     switch (self.instruction_register) {
-                        instr.LSRabsX, instr.ASLabsX, instr.RORabsX,
-                        instr.ROLabsX => {
+                        instr.LSRabsX.op, instr.ASLabsX.op, instr.RORabsX.op,
+                        instr.ROLabsX.op => {
                             // Shifted value was stored internally in indirect_jump, address is in data_latch
                             self.safeBusWrite(self.data_latch +% self.x_register, @intCast(self.indirect_jump));
                             self.endInstruction();
                         },
-                        instr.DECabsX, instr.INCabsX => |instruction| {
-                            self.incrementAt(self.data_latch +% self.x_register, instruction == instr.DECabsX);
+                        instr.DECabsX.op, instr.INCabsX.op => |instruction| {
+                            self.incrementAt(self.data_latch +% self.x_register, instruction == instr.DECabsX.op);
                             self.endInstruction();
                         },
                         else => return logIllegalInstruction(self.*)
@@ -881,6 +862,7 @@ pub fn CPU(Bus: type) type {
         }
 
         pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            const pneumonic = if (instr.getMetadata(self.instruction_register)) |m| m.pneumonic else "<UNKNOWN>";
             try writer.print(
                 "T{d}; A=0x{X:0>2}, X=0x{X:0>2}, Y=0x{X:0>2}, PC=0x{X:0>4}, SP=0x{X:0>2}, IR=0x{X:0>2}({s}), S=0x{X:0>2}",
                 .{
@@ -891,7 +873,7 @@ pub fn CPU(Bus: type) type {
                     self.program_counter -% 1   ,
                     self.stack_pointer,
                     self.instruction_register,
-                    instr.getPneumonic(self.instruction_register)[0..3],
+                    pneumonic,
                     self.status_register
                 }
             );
@@ -899,7 +881,7 @@ pub fn CPU(Bus: type) type {
 
         fn logIllegalInstruction(self: Self) CPUError!void {
             // Find opcode name to dissasemble
-            const instr_name = instr.getPneumonic(self.instruction_register);
+            const instr_name = if (instr.getMetadata(self.instruction_register)) |m| m.pneumonic else "<UNKNOWN>";
             logger.err(
                 "Reached illegal instruction \"{s}\"\n{any}\n",
                 .{instr_name, self}
@@ -913,282 +895,321 @@ pub const reset_vector_low_order: u16 = 0xfffc;
 
 // Instruction pneumonics
 pub const instr = struct {
-    pub fn getPneumonic(opcode: u8) []const u8 {
+    // Builds a jump table (at comptime) to get instruction metadata at runtime
+    pub fn getMetadata(opcode: u8) ?*const Metadata {
         return switch (opcode) {
-            inline 0...0xFF => |opc| comptime blk: {
-                @setEvalBranchQuota(100000000);
-                for (@typeInfo(instr).Struct.decls) |d| {
-                    const field = @field(instr, d.name);
-                    if (@TypeOf(field) != comptime_int) continue;
-                    if (@field(instr, d.name) == opc) break :blk d.name;
-                }
-                break :blk "<UNKNOWN>";
-            }
+              inline 0...0xFF => |opc| comptime blk: {
+                  @setEvalBranchQuota(100000);
+                  for (@typeInfo(instr).Struct.decls) |d| {
+                      const field = @field(instr, d.name);
+                      if (@TypeOf(field) != Metadata) continue;
+                      if (field.op == opc) break :blk &field;
+                  }
+                  break :blk null;
+              }
         };
     }
 
+    const Metadata = struct {
+        pneumonic: []const u8,
+        op: u8,
+        addressing: AddressingMode,
+        cycles: u3,
+        len: u2,
+        // page_branch: bool = false,  // Indicates 1 possible extra cycle on page crossing
+        // ind_branch: bool = false,  // Indicates up to 2 possible extra cycles on different page branch
+    };
+
     // Add memory to accumulator with carry
-    pub const ADCimm = 0x69;
-    pub const ADCzpg = 0x65;
-    pub const ADCzpgX = 0x75;
-    pub const ADCabs = 0x6D;
-    pub const ADCabsX = 0x7D;
-    pub const ADCabsY = 0x79;
-    pub const ADCindX = 0x61;
-    pub const ADCindY = 0x71;
+    pub const ADCimm: Metadata = .{.pneumonic = "ADC", .op = 0x69, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const ADCzpg: Metadata = .{.pneumonic = "ADC", .op = 0x65, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const ADCzpgX: Metadata = .{.pneumonic = "ADC", .op = 0x75, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const ADCabs: Metadata = .{.pneumonic = "ADC", .op = 0x6D, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const ADCabsX: Metadata = .{.pneumonic = "ADC", .op = 0x7D, .addressing = .AbsoluteX, .cycles = 4, .len = 3};
+    pub const ADCabsY: Metadata = .{.pneumonic = "ADC", .op = 0x79, .addressing = .AbsoluteY, .cycles = 4, .len = 3};
+    pub const ADCindX: Metadata = .{.pneumonic = "ADC", .op = 0x61, .addressing = .IndirectX, .cycles = 6, .len = 2};
+    pub const ADCindY: Metadata = .{.pneumonic = "ADC", .op = 0x71, .addressing = .IndirectY, .cycles = 5, .len = 2};
 
     // AND memory with accumulator
-    pub const ANDimm = 0x29;
-    pub const ANDzpg = 0x25;
-    pub const ANDzpgX = 0x35;
-    pub const ANDabs = 0x2D;
-    pub const ANDabsX = 0x3D;
-    pub const ANDabsY = 0x39;
-    pub const ANDindX = 0x21;
-    pub const ANDindY = 0x31;
+    pub const ANDimm: Metadata = .{.pneumonic = "AND", .op = 0x29, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const ANDzpg: Metadata = .{.pneumonic = "AND", .op = 0x25, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const ANDzpgX: Metadata = .{.pneumonic = "AND", .op = 0x35, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const ANDabs: Metadata = .{.pneumonic = "AND", .op = 0x2D, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const ANDabsX: Metadata = .{.pneumonic = "AND", .op = 0x3D, .addressing = .AbsoluteX, .cycles = 4, .len = 3};
+    pub const ANDabsY: Metadata = .{.pneumonic = "AND", .op = 0x39, .addressing = .AbsoluteY, .cycles = 4, .len = 3};
+    pub const ANDindX: Metadata = .{.pneumonic = "AND", .op = 0x21, .addressing = .IndirectX, .cycles = 6, .len = 2};
+    pub const ANDindY: Metadata = .{.pneumonic = "AND", .op = 0x31, .addressing = .IndirectY, .cycles = 5, .len = 2};
 
     // Shift left one bit
-    pub const ASLacc = 0x0A;
-    pub const ASLzpg = 0x06;
-    pub const ASLzpgX = 0x16;
-    pub const ASLabs = 0x0E;
-    pub const ASLabsX = 0x1E;
+    pub const ASLacc: Metadata = .{.pneumonic = "ASL", .op = 0x0A, .addressing = .Accumulator, .cycles = 2, .len = 1};
+    pub const ASLzpg: Metadata = .{.pneumonic = "ASL", .op = 0x06, .addressing = .ZeroPage, .cycles = 5, .len = 2};
+    pub const ASLzpgX: Metadata = .{.pneumonic = "ASL", .op = 0x16, .addressing = .ZeroPageX, .cycles = 6, .len = 2};
+    pub const ASLabs: Metadata = .{.pneumonic = "ASL", .op = 0x0E, .addressing = .Absolute, .cycles = 6, .len = 3};
+    pub const ASLabsX: Metadata = .{.pneumonic = "ASL", .op = 0x1E, .addressing = .AbsoluteX, .cycles = 7, .len = 3};
 
     // Branch on carry clear
-    pub const BCCrel = 0x90;
+    pub const BCCrel: Metadata = .{.pneumonic = "BCC", .op = 0x90, .addressing = .Relative, .cycles = 2, .len = 2};
 
     // Branch on carry set
-    pub const BCSrel = 0xB0;
+    pub const BCSrel: Metadata = .{.pneumonic = "BCS", .op = 0xB0, .addressing = .Relative, .cycles = 2, .len = 2};
 
     // Branch on result zero
-    pub const BEQrel = 0xF0;
+    pub const BEQrel: Metadata = .{.pneumonic = "BEQ", .op = 0xF0, .addressing = .Relative, .cycles = 2, .len = 2};
 
     // Test bits in memory with accumulator;
-    pub const BITzpg = 0x24;
-    pub const BITabs = 0x2C;
+    pub const BITzpg: Metadata = .{.pneumonic = "BIT", .op = 0x24, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const BITabs: Metadata = .{.pneumonic = "BIT", .op = 0x2C, .addressing = .Absolute, .cycles = 4, .len = 3};
 
     // Branch on result minus
-    pub const BMIrel = 0x30;
+    pub const BMIrel: Metadata = .{.pneumonic = "BMI", .op = 0x30, .addressing = .Relative, .cycles = 2, .len = 2};
 
     // Branch on result not zero
-    pub const BNErel = 0xD0;
+    pub const BNErel: Metadata = .{.pneumonic = "BNE", .op = 0xD0, .addressing = .Relative, .cycles = 2, .len = 2};
 
     // Branch on result plus
-    pub const BPLrel = 0x10;
+    pub const BPLrel: Metadata = .{.pneumonic = "BPL", .op = 0x10, .addressing = .Relative, .cycles = 2, .len = 2};
 
     // Force break signal
-    pub const BRK = 0x00;
+    pub const BRK: Metadata = .{.pneumonic = "BRK", .op = 0x00, .addressing = .Implied, .cycles = 7, .len = 1};
 
     // Branch on overflow clear
-    pub const BVCrel = 0x50;
+    pub const BVCrel: Metadata = .{.pneumonic = "BVC", .op = 0x50, .addressing = .Relative, .cycles = 2, .len = 2};
 
     // Branch on overflow set
-    pub const BVSrel = 0x70;
+    pub const BVSrel: Metadata = .{.pneumonic = "BVS", .op = 0x70, .addressing = .Relative, .cycles = 2, .len = 2};
 
     // Clear carry flag
-    pub const CLC = 0x18;
+    pub const CLC: Metadata = .{.pneumonic = "CLC", .op = 0x18, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Clear decimal mode
-    pub const CLD = 0xD8;
+    pub const CLD: Metadata = .{.pneumonic = "CLD", .op = 0xD8, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Clear interrupt disable bit
-    pub const CLI = 0x58;
+    pub const CLI: Metadata = .{.pneumonic = "CLI", .op = 0x58, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Clear overflow flag
-    pub const CLV = 0xB8;
+    pub const CLV: Metadata = .{.pneumonic = "CLV", .op = 0xB8, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Compare memory with accumulator
-    pub const CMPimm = 0xC9;
-    pub const CMPzpg = 0xC5;
-    pub const CMPzpgX = 0xD5;
-    pub const CMPabs = 0xCD;
-    pub const CMPabsX = 0xDD;
-    pub const CMPabsY = 0xD9;
-    pub const CMPindX = 0xC1;
-    pub const CMPindY = 0xD1;
+    pub const CMPimm: Metadata = .{.pneumonic = "CMP", .op = 0xC9, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const CMPzpg: Metadata = .{.pneumonic = "CMP", .op = 0xC5, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const CMPzpgX: Metadata = .{.pneumonic = "CMP", .op = 0xD5, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const CMPabs: Metadata = .{.pneumonic = "CMP", .op = 0xCD, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const CMPabsX: Metadata = .{.pneumonic = "CMP", .op = 0xDD, .addressing = .AbsoluteX, .cycles = 4, .len = 3};
+    pub const CMPabsY: Metadata = .{.pneumonic = "CMP", .op = 0xD9, .addressing = .AbsoluteY, .cycles = 4, .len = 3};
+    pub const CMPindX: Metadata = .{.pneumonic = "CMP", .op = 0xC1, .addressing = .IndirectX, .cycles = 6, .len = 2};
+    pub const CMPindY: Metadata = .{.pneumonic = "CMP", .op = 0xD1, .addressing = .IndirectY, .cycles = 5, .len = 2};
 
     // Compare memory and index X
-    pub const CPXimm = 0xE0;
-    pub const CPXzpg = 0xE4;
-    pub const CPXabs = 0xEC;
+    pub const CPXimm: Metadata = .{.pneumonic = "CPX", .op = 0xE0, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const CPXzpg: Metadata = .{.pneumonic = "CPX", .op = 0xE4, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const CPXabs: Metadata = .{.pneumonic = "CPX", .op = 0xEC, .addressing = .Absolute, .cycles = 4, .len = 3};
 
     // Compare memory and index Y
-    pub const CPYimm = 0xC0;
-    pub const CPYzpg = 0xC4;
-    pub const CPYabs = 0xCC;
+    pub const CPYimm: Metadata = .{.pneumonic = "CPY", .op = 0xC0, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const CPYzpg: Metadata = .{.pneumonic = "CPY", .op = 0xC4, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const CPYabs: Metadata = .{.pneumonic = "CPY", .op = 0xCC, .addressing = .Absolute, .cycles = 4, .len = 3};
 
     // Decrement memory by one
-    pub const DECzpg = 0xC6;
-    pub const DECzpgX = 0xD6;
-    pub const DECabs = 0xCE;
-    pub const DECabsX = 0xDE;
+    pub const DECzpg: Metadata = .{.pneumonic = "DEC", .op = 0xC6, .addressing = .ZeroPage, .cycles = 5, .len = 2};
+    pub const DECzpgX: Metadata = .{.pneumonic = "DEC", .op = 0xD6, .addressing = .ZeroPageX, .cycles = 6, .len = 2};
+    pub const DECabs: Metadata = .{.pneumonic = "DEC", .op = 0xCE, .addressing = .Absolute, .cycles = 6, .len = 3};
+    pub const DECabsX: Metadata = .{.pneumonic = "DEC", .op = 0xDE, .addressing = .AbsoluteX, .cycles = 7, .len = 3};
 
     // Decrement index X by one
-    pub const DEX = 0xCA;
+    pub const DEX: Metadata = .{.pneumonic = "DEX", .op = 0xCA, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Decrement index Y by one;
-    pub const DEY = 0x88;
+    pub const DEY: Metadata = .{.pneumonic = "DEY", .op = 0x88, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // ExclusiveOR memory with accumulator
-    pub const EORimm = 0x49;
-    pub const EORzpg = 0x45;
-    pub const EORzpgX = 0x55;
-    pub const EORabs = 0x4D;
-    pub const EORabsX = 0x5D;
-    pub const EORabsY = 0x59;
-    pub const EORindX = 0x41;
-    pub const EORindY = 0x51;
+    pub const EORimm: Metadata = .{.pneumonic = "EOR", .op = 0x49, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const EORzpg: Metadata = .{.pneumonic = "EOR", .op = 0x45, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const EORzpgX: Metadata = .{.pneumonic = "EOR", .op = 0x55, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const EORabs: Metadata = .{.pneumonic = "EOR", .op = 0x4D, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const EORabsX: Metadata = .{.pneumonic = "EOR", .op = 0x5D, .addressing = .AbsoluteX, .cycles = 4, .len = 3};
+    pub const EORabsY: Metadata = .{.pneumonic = "EOR", .op = 0x59, .addressing = .AbsoluteY, .cycles = 4, .len = 3};
+    pub const EORindX: Metadata = .{.pneumonic = "EOR", .op = 0x41, .addressing = .IndirectX, .cycles = 6, .len = 2};
+    pub const EORindY: Metadata = .{.pneumonic = "EOR", .op = 0x51, .addressing = .IndirectY, .cycles = 5, .len = 2};
 
     // Increment memory by one;
-    pub const INCzpg = 0xE6;
-    pub const INCzpgX = 0xF6;
-    pub const INCabs = 0xEE;
-    pub const INCabsX = 0xFE;
+    pub const INCzpg: Metadata = .{.pneumonic = "INC", .op = 0xE6, .addressing = .ZeroPage, .cycles = 5, .len = 2};
+    pub const INCzpgX: Metadata = .{.pneumonic = "INC", .op = 0xF6, .addressing = .ZeroPageX, .cycles = 6, .len = 2};
+    pub const INCabs: Metadata = .{.pneumonic = "INC", .op = 0xEE, .addressing = .Absolute, .cycles = 6, .len = 3};
+    pub const INCabsX: Metadata = .{.pneumonic = "INC", .op = 0xFE, .addressing = .AbsoluteX, .cycles = 7, .len = 3};
 
     // Increment index X by one;
-    pub const INX = 0xE8;
+    pub const INX: Metadata = .{.pneumonic = "INX", .op = 0xE8, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Increment index Y by one;
-    pub const INY = 0xC8;
+    pub const INY: Metadata = .{.pneumonic = "INY", .op = 0xC8, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Jump to new location
-    pub const JMPabs = 0x4C;
-    pub const JMPind = 0x6C;
+    pub const JMPabs: Metadata = .{.pneumonic = "JMP", .op = 0x4C, .addressing = .Absolute, .cycles = 3, .len = 3};
+    pub const JMPind: Metadata = .{.pneumonic = "JMP", .op = 0x6C, .addressing = .Indirect, .cycles = 5, .len = 3};
 
     // Jump to new location saving return address
-    pub const JSRabs = 0x20;
+    pub const JSRabs: Metadata = .{.pneumonic = "JSR", .op = 0x20, .addressing = .Absolute, .cycles = 6, .len = 3};
 
     // Load accumulator with memory
-    pub const LDAimm = 0xA9;
-    pub const LDAzpg = 0xA5;
-    pub const LDAzpgX = 0xB5;
-    pub const LDAabs = 0xAD;
-    pub const LDAabsX = 0xBD;
-    pub const LDAabsY = 0xB9;
-    pub const LDAindX = 0xA1;
-    pub const LDAindY = 0xB1;
+    pub const LDAimm: Metadata = .{.pneumonic = "LDA", .op = 0xA9, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const LDAzpg: Metadata = .{.pneumonic = "LDA", .op = 0xA5, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const LDAzpgX: Metadata = .{.pneumonic = "LDA", .op = 0xB5, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const LDAabs: Metadata = .{.pneumonic = "LDA", .op = 0xAD, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const LDAabsX: Metadata = .{.pneumonic = "LDA", .op = 0xBD, .addressing = .AbsoluteX, .cycles = 4, .len = 3};
+    pub const LDAabsY: Metadata = .{.pneumonic = "LDA", .op = 0xB9, .addressing = .AbsoluteY, .cycles = 4, .len = 3};
+    pub const LDAindX: Metadata = .{.pneumonic = "LDA", .op = 0xA1, .addressing = .IndirectX, .cycles = 6, .len = 2};
+    pub const LDAindY: Metadata = .{.pneumonic = "LDA", .op = 0xB1, .addressing = .IndirectY, .cycles = 5, .len = 2};
 
     // Load index X with memory
-    pub const LDXimm = 0xA2;
-    pub const LDXzpg = 0xA6;
-    pub const LDXzpgY = 0xB6;
-    pub const LDXabs = 0xAE;
-    pub const LDXabsY = 0xBE;
+    pub const LDXimm: Metadata = .{.pneumonic = "LDX", .op = 0xA2, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const LDXzpg: Metadata = .{.pneumonic = "LDX", .op = 0xA6, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const LDXzpgY: Metadata = .{.pneumonic = "LDX", .op = 0xB6, .addressing = .ZeroPageY, .cycles = 4, .len = 2};
+    pub const LDXabs: Metadata = .{.pneumonic = "LDX", .op = 0xAE, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const LDXabsY: Metadata = .{.pneumonic = "LDX", .op = 0xBE, .addressing = .AbsoluteY, .cycles = 4, .len = 3};
 
     // Load index Y with memory
-    pub const LDYimm = 0xA0;
-    pub const LDYzpg = 0xA4;
-    pub const LDYzpgX = 0xB4;
-    pub const LDYabs = 0xAC;
-    pub const LDYabsX = 0xBC;
+    pub const LDYimm: Metadata = .{.pneumonic = "LDY", .op = 0xA0, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const LDYzpg: Metadata = .{.pneumonic = "LDY", .op = 0xA4, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const LDYzpgX: Metadata = .{.pneumonic = "LDY", .op = 0xB4, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const LDYabs: Metadata = .{.pneumonic = "LDY", .op = 0xAC, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const LDYabsX: Metadata = .{.pneumonic = "LDY", .op = 0xBC, .addressing = .AbsoluteX, .cycles = 4, .len = 3};
 
     // Shift one bit right
-    pub const LSRacc = 0x4A;
-    pub const LSRzpg = 0x46;
-    pub const LSRzpgX = 0x56;
-    pub const LSRabs = 0x4E;
-    pub const LSRabsX = 0x5E;
+    pub const LSRacc: Metadata = .{.pneumonic = "LSR", .op = 0x4A, .addressing = .Accumulator, .cycles = 2, .len = 1};
+    pub const LSRzpg: Metadata = .{.pneumonic = "LSR", .op = 0x46, .addressing = .ZeroPage, .cycles = 5, .len = 2};
+    pub const LSRzpgX: Metadata = .{.pneumonic = "LSR", .op = 0x56, .addressing = .ZeroPageX, .cycles = 6, .len = 2};
+    pub const LSRabs: Metadata = .{.pneumonic = "LSR", .op = 0x4E, .addressing = .Absolute, .cycles = 6, .len = 3};
+    pub const LSRabsX: Metadata = .{.pneumonic = "LSR", .op = 0x5E, .addressing = .AbsoluteX, .cycles = 7, .len = 3};
 
     // No operation
-    pub const NOP = 0xEA;
+    // Adding illegal NOPs to pass tests
+    pub const NOP: Metadata = .{.pneumonic = "NOP", .op = 0xEA, .addressing = .Implied, .cycles = 2, .len = 1};
+    // pub const NOPimpl0: metadata = .{.pneumonic = "NOP", .op = 0x1A, .addressing = , .cycles = , .len = };
+    // pub const NOPimpl1: metadata = .{.pneumonic = "NOP", .op = 0x3A, .addressing = , .cycles = , .len = };
+    // pub const NOPimpl2: metadata = .{.pneumonic = "NOP", .op = 0x5A, .addressing = , .cycles = , .len = };
+    // pub const NOPimpl3: metadata = .{.pneumonic = "NOP", .op = 0x7A, .addressing = , .cycles = , .len = };
+    // pub const NOPimpl4: metadata = .{.pneumonic = "NOP", .op = 0xDA, .addressing = , .cycles = , .len = };
+    // pub const NOPimpl5: metadata = .{.pneumonic = "NOP", .op = 0xFA, .addressing = , .cycles = , .len = };
+    // pub const NOPimm0: metadata = .{.pneumonic = "NOP", .op = 0x80, .addressing = , .cycles = , .len = };
+    // pub const NOPimm1: metadata = .{.pneumonic = "NOP", .op = 0x82, .addressing = , .cycles = , .len = };
+    // pub const NOPimm2: metadata = .{.pneumonic = "NOP", .op = 0x89, .addressing = , .cycles = , .len = };
+    // pub const NOPimm3: metadata = .{.pneumonic = "NOP", .op = 0xC2, .addressing = , .cycles = , .len = };
+    // pub const NOPimm4: metadata = .{.pneumonic = "NOP", .op = 0xE2, .addressing = , .cycles = , .len = };
+    // pub const NOPzpg0: metadata = .{.pneumonic = "NOP", .op = 0x04, .addressing = , .cycles = , .len = };
+    // pub const NOPzpg1: metadata = .{.pneumonic = "NOP", .op = 0x44, .addressing = , .cycles = , .len = };
+    // pub const NOPzpg2: metadata = .{.pneumonic = "NOP", .op = 0x64, .addressing = , .cycles = , .len = };
+    // pub const NOPzpgX0: metadata = .{.pneumonic = "NOP", .op = 0x64, .addressing = , .cycles = , .len = };
+    // pub const NOPzpgX1: metadata = .{.pneumonic = "NOP", .op = 0x64, .addressing = , .cycles = , .len = };
+    // pub const NOPzpgX2: metadata = .{.pneumonic = "NOP", .op = 0x54, .addressing = , .cycles = , .len = };
+    // pub const NOPzpgX3: metadata = .{.pneumonic = "NOP", .op = 0x74, .addressing = , .cycles = , .len = };
+    // pub const NOPzpgX4: metadata = .{.pneumonic = "NOP", .op = 0xD4, .addressing = , .cycles = , .len = };
+    // pub const NOPzpgX5: metadata = .{.pneumonic = "NOP", .op = 0xF4, .addressing = , .cycles = , .len = };
+    // pub const NOPabs: metadata = .{.pneumonic = "NOP", .op = 0x0C, .addressing = , .cycles = , .len = };
+    // pub const NOPabsX0: metadata = .{.pneumonic = "NOP", .op = 0x1C, .addressing = , .cycles = , .len = };
+    // pub const NOPabsX1: metadata = .{.pneumonic = "NOP", .op = 0x3C, .addressing = , .cycles = , .len = };
+    // pub const NOPabsX2: metadata = .{.pneumonic = "NOP", .op = 0x5C, .addressing = , .cycles = , .len = };
+    // pub const NOPabsX3: metadata = .{.pneumonic = "NOP", .op = 0x7C, .addressing = , .cycles = , .len = };
+    // pub const NOPabsX4: metadata = .{.pneumonic = "NOP", .op = 0xDC, .addressing = , .cycles = , .len = };
+    // pub const NOPabsX5: metadata = .{.pneumonic = "NOP", .op = 0xFC, .addressing = , .cycles = , .len = };
 
     // OR memory with accumulator
-    pub const ORAimm = 0x09;
-    pub const ORAzpg = 0x05;
-    pub const ORAzpgX = 0x15;
-    pub const ORAabs = 0x0D;
-    pub const ORAabsX = 0x1D;
-    pub const ORAabsY = 0x19;
-    pub const ORAindX = 0x01;
-    pub const ORAindY = 0x11;
+    pub const ORAimm: Metadata = .{.pneumonic = "ORA", .op = 0x09, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const ORAzpg: Metadata = .{.pneumonic = "ORA", .op = 0x05, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const ORAzpgX: Metadata = .{.pneumonic = "ORA", .op = 0x15, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const ORAabs: Metadata = .{.pneumonic = "ORA", .op = 0x0D, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const ORAabsX: Metadata = .{.pneumonic = "ORA", .op = 0x1D, .addressing = .AbsoluteX, .cycles = 4, .len = 3};
+    pub const ORAabsY: Metadata = .{.pneumonic = "ORA", .op = 0x19, .addressing = .AbsoluteY, .cycles = 4, .len = 3};
+    pub const ORAindX: Metadata = .{.pneumonic = "ORA", .op = 0x01, .addressing = .IndirectX, .cycles = 6, .len = 2};
+    pub const ORAindY: Metadata = .{.pneumonic = "ORA", .op = 0x11, .addressing = .IndirectY, .cycles = 5, .len = 2};
 
     // Push accumulator on stack
-    pub const PHA = 0x48;
+    pub const PHA: Metadata = .{.pneumonic = "PHA", .op = 0x48, .addressing = .Implied, .cycles = 3, .len = 1};
 
     // Push status on stack
-    pub const PHP = 0x08;
+    pub const PHP: Metadata = .{.pneumonic = "PHP", .op = 0x08, .addressing = .Implied, .cycles = 3, .len = 1};
 
     // Pull accumulator from stack
-    pub const PLA = 0x68;
+    pub const PLA: Metadata = .{.pneumonic = "PLA", .op = 0x68, .addressing = .Implied, .cycles = 4, .len = 1};
 
     // Pull status from stack
-    pub const PLP = 0x28;
+    pub const PLP: Metadata = .{.pneumonic = "PLP", .op = 0x28, .addressing = .Implied, .cycles = 4, .len = 1};
 
     // Rotate one bit left
-    pub const ROLacc = 0x2A;
-    pub const ROLzpg = 0x26;
-    pub const ROLzpgX = 0x36;
-    pub const ROLabs = 0x2E;
-    pub const ROLabsX = 0x3E;
+    pub const ROLacc: Metadata = .{.pneumonic = "ROL", .op = 0x2A, .addressing = .Accumulator, .cycles = 2, .len = 1};
+    pub const ROLzpg: Metadata = .{.pneumonic = "ROL", .op = 0x26, .addressing = .ZeroPage, .cycles = 5, .len = 2};
+    pub const ROLzpgX: Metadata = .{.pneumonic = "ROL", .op = 0x36, .addressing = .ZeroPageX, .cycles = 6, .len = 2};
+    pub const ROLabs: Metadata = .{.pneumonic = "ROL", .op = 0x2E, .addressing = .Absolute, .cycles = 6, .len = 3};
+    pub const ROLabsX: Metadata = .{.pneumonic = "ROL", .op = 0x3E, .addressing = .AbsoluteX, .cycles = 7, .len = 3};
 
     // Rotate one bit right
-    pub const RORacc = 0x6A;
-    pub const RORzpg = 0x66;
-    pub const RORzpgX = 0x76;
-    pub const RORabs = 0x6E;
-    pub const RORabsX = 0x7E;
+    pub const RORacc: Metadata = .{.pneumonic = "ROR", .op = 0x6A, .addressing = .Accumulator, .cycles = 2, .len = 1};
+    pub const RORzpg: Metadata = .{.pneumonic = "ROR", .op = 0x66, .addressing = .ZeroPage, .cycles = 5, .len = 2};
+    pub const RORzpgX: Metadata = .{.pneumonic = "ROR", .op = 0x76, .addressing = .ZeroPageX, .cycles = 6, .len = 2};
+    pub const RORabs: Metadata = .{.pneumonic = "ROR", .op = 0x6E, .addressing = .Absolute, .cycles = 6, .len = 3};
+    pub const RORabsX: Metadata = .{.pneumonic = "ROR", .op = 0x7E, .addressing = .AbsoluteX, .cycles = 7, .len = 3};
 
     // Return from interrupt
-    pub const RTI = 0x40;
+    pub const RTI: Metadata = .{.pneumonic = "RTI", .op = 0x40, .addressing = .Implied, .cycles = 6, .len = 1};
 
     // Return from subroutine (from a JSR)
-    pub const RTS = 0x60;
+    pub const RTS: Metadata = .{.pneumonic = "RTS", .op = 0x60, .addressing = .Implied, .cycles = 6, .len = 1};
 
     // Subtract memory from accumulator with borrow
-    pub const SBCimm = 0xE9;
-    pub const SBCzpg = 0xE5;
-    pub const SBCzpgX = 0xF5;
-    pub const SBCabs = 0xED;
-    pub const SBCabsX = 0xFD;
-    pub const SBCabsY = 0xF9;
-    pub const SBCindX = 0xE1;
-    pub const SBCindY = 0xF1;
+    pub const SBCimm: Metadata = .{.pneumonic = "SBC", .op = 0xE9, .addressing = .Immediate, .cycles = 2, .len = 2};
+    pub const SBCzpg: Metadata = .{.pneumonic = "SBC", .op = 0xE5, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const SBCzpgX: Metadata = .{.pneumonic = "SBC", .op = 0xF5, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const SBCabs: Metadata = .{.pneumonic = "SBC", .op = 0xED, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const SBCabsX: Metadata = .{.pneumonic = "SBC", .op = 0xFD, .addressing = .AbsoluteX, .cycles = 4, .len = 3};
+    pub const SBCabsY: Metadata = .{.pneumonic = "SBC", .op = 0xF9, .addressing = .AbsoluteY, .cycles = 4, .len = 3};
+    pub const SBCindX: Metadata = .{.pneumonic = "SBC", .op = 0xE1, .addressing = .IndirectX, .cycles = 6, .len = 2};
+    pub const SBCindY: Metadata = .{.pneumonic = "SBC", .op = 0xF1, .addressing = .IndirectY, .cycles = 5, .len = 2};
 
     // Set carry flag
-    pub const SEC = 0x38;
+    pub const SEC: Metadata = .{.pneumonic = "SEC", .op = 0x38, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Set decimal flag
-    pub const SED = 0xF8;
+    pub const SED: Metadata = .{.pneumonic = "SED", .op = 0xF8, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Set interrupt disable status
-    pub const SEI = 0x78;
+    pub const SEI: Metadata = .{.pneumonic = "SEI", .op = 0x78, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Store accumulator in memory
-    pub const STAzpg = 0x85;
-    pub const STAzpgX = 0x95;
-    pub const STAabs = 0x8D;
-    pub const STAabsX = 0x9D;
-    pub const STAabsY = 0x99;
-    pub const STAindX = 0x81;
-    pub const STAindY = 0x91;
+    pub const STAzpg: Metadata = .{.pneumonic = "STA", .op = 0x85, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const STAzpgX: Metadata = .{.pneumonic = "STA", .op = 0x95, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const STAabs: Metadata = .{.pneumonic = "STA", .op = 0x8D, .addressing = .Absolute, .cycles = 4, .len = 3};
+    pub const STAabsX: Metadata = .{.pneumonic = "STA", .op = 0x9D, .addressing = .AbsoluteX, .cycles = 5, .len = 3};
+    pub const STAabsY: Metadata = .{.pneumonic = "STA", .op = 0x99, .addressing = .AbsoluteY, .cycles = 5, .len = 3};
+    pub const STAindX: Metadata = .{.pneumonic = "STA", .op = 0x81, .addressing = .IndirectX, .cycles = 6, .len = 2};
+    pub const STAindY: Metadata = .{.pneumonic = "STA", .op = 0x91, .addressing = .IndirectY, .cycles = 6, .len = 2};
 
     // Store index X in memory
-    pub const STXzpg = 0x86;
-    pub const STXzpgY = 0x96;
-    pub const STXabs = 0x8E;
+    pub const STXzpg: Metadata = .{.pneumonic = "STX", .op = 0x86, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const STXzpgY: Metadata = .{.pneumonic = "STX", .op = 0x96, .addressing = .ZeroPageY, .cycles = 4, .len = 2};
+    pub const STXabs: Metadata = .{.pneumonic = "STX", .op = 0x8E, .addressing = .Absolute, .cycles = 4, .len = 3};
 
     // Store index Y in memory
-    pub const STYzpg = 0x84;
-    pub const STYzpgX = 0x94;
-    pub const STYabs = 0x8C;
+    pub const STYzpg: Metadata = .{.pneumonic = "STY", .op = 0x84, .addressing = .ZeroPage, .cycles = 3, .len = 2};
+    pub const STYzpgX: Metadata = .{.pneumonic = "STY", .op = 0x94, .addressing = .ZeroPageX, .cycles = 4, .len = 2};
+    pub const STYabs: Metadata = .{.pneumonic = "STY", .op = 0x8C, .addressing = .Absolute, .cycles = 4, .len = 3};
 
     // Transfer accumulator to index X
-    pub const TAX = 0xAA;
+    pub const TAX: Metadata = .{.pneumonic = "TAX", .op = 0xAA, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Transfer accumulator to index Y
-    pub const TAY = 0xA8;
+    pub const TAY: Metadata = .{.pneumonic = "TAY", .op = 0xA8, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Transfer stack pointer to index X
-    pub const TSX = 0xBA;
+    pub const TSX: Metadata = .{.pneumonic = "TSX", .op = 0xBA, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Transfer index X to accumulator
-    pub const TXA = 0x8A;
+    pub const TXA: Metadata = .{.pneumonic = "TXA", .op = 0x8A, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Transfer index X to stack pointer
-    pub const TXS = 0x9A;
+    pub const TXS: Metadata = .{.pneumonic = "TXS", .op = 0x9A, .addressing = .Implied, .cycles = 2, .len = 1};
 
     // Transfer index Y to accumulator
-    pub const TYA = 0x98;
+    pub const TYA: Metadata = .{.pneumonic = "TYA", .op = 0x98, .addressing = .Implied, .cycles = 2, .len = 1};
 };
 
 pub const StatusFlag = enum(u8) {
@@ -1205,6 +1226,22 @@ pub const CPUError = error {
     IllegalClockState, // When the cpu reaches a "current_instruction_cycle" that doesn't represent any possible state
     IllegalInstruction,
     NotImplemented
+};
+
+pub const AddressingMode = enum {
+    Accumulator,  // No addressing
+    Implied,  // No addressing
+    Relative,
+    Immediate,
+    Absolute,
+    AbsoluteX,
+    AbsoluteY,
+    ZeroPage,
+    ZeroPageX,
+    ZeroPageY,
+    Indirect,
+    IndirectX,
+    IndirectY
 };
 
 test "Full Instruction Rom" {
