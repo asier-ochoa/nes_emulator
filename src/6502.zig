@@ -848,7 +848,7 @@ pub fn CPU(Bus: type) type {
             if (comp == value) self.setFlag(.zero) else self.clearFlag(.zero);
         }
 
-        inline fn safeBusRead(self: Self, address: u16) u8 {
+        pub inline fn safeBusRead(self: Self, address: u16) u8 {
             return self.bus.cpuRead(address) catch blk: {
                 logger.warn("Unmapped read from address 0x{X:0>4}, returning 0\n", .{address});
                 break :blk 0;
