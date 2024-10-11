@@ -30,7 +30,7 @@ const DissassemblyOptionsTag = enum {
 };
 
 const DissassemblyOptions = union(DissassemblyOptionsTag) {
-    current_instruction: struct {},
+    current_instruction: struct {record_state: bool = true},
     single_instruction: struct {address: u16},
     slice: struct {memory: []const u8, alloc: *std.mem.Allocator},
     from_to: struct {
@@ -106,7 +106,41 @@ const InstructionDissasembly = struct {
     y_value: ?u8 = null,  // Recorded only for x indexed addressing modes
 
     // 6502 assembly format
-    // pub fn format(_: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, _: anytype) !void {
-    //     // writer.write(self.pneumonic)
-    // }
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        // Write pneumonic. |LDA|
+        _ = try writer.write(self.pneumonic);
+
+        // Write addressing mode symbol |LDA ($|
+        switch (self.addressing) {
+            .Accumulator => _ = try writer.write(" A"),
+            .Absolute, .AbsoluteX, .AbsoluteY,
+            .ZeroPage, .ZeroPageX, .ZeroPageY,
+            .Relative => _ = try writer.write(" $"),
+            .Immediate => _ = try writer.write(" #$"),
+            .Indirect, .IndirectX, .IndirectY => _ = try writer.write(" ($"),
+            else => {}
+        }
+
+        // Write operand |LDA ($12AE| in Big endian
+        switch (self.addressing) {
+            .Absolute, .AbsoluteX, .AbsoluteY,
+            .Indirect => _ = try writer.print("{X:0>4}", .{(@as(u16, self.op_codes[2].?) << 8 & self.op_codes[1].?)}),
+            .Immediate, .IndirectX, .IndirectY,
+            .Relative, .ZeroPage, .ZeroPageX,
+            .ZeroPageY => _ = try writer.print("{X:0>2}", .{self.op_codes[1].?}),
+            else => {}
+        }
+
+        // Write terminator |LDA ($12AE)|
+        _ = try writer.write(switch (self.addressing) {
+            .AbsoluteX => ",X",
+            .AbsoluteY => ",Y",
+            .Indirect => ")",
+            .IndirectX => ",X)",
+            .IndirectY => "),Y",
+            .ZeroPageX => ",X",
+            .ZeroPageY => ",Y",
+            else => ""
+        });
+    }
 };
