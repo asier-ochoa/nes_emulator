@@ -70,17 +70,17 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
                 .value_at_address = if (inner_opt == .current_instruction and inner_opt.current_instruction.record_state) switch (meta.addressing) {
                     .Absolute => if (operands[0].? != proc.instr.JSRabs.op and operands[0].? != proc.instr.JMPabs.op)
                         cpu.safeBusRead(@as(u16, operands[2].?) << 8 | operands[1].?)
-                        else null
-                    ,
+                        else null,
                     .AbsoluteX => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.x_register),
                     .AbsoluteY => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.y_register),
                     .ZeroPage => cpu.safeBusRead(operands[1].?),
                     .ZeroPageX => cpu.safeBusRead(operands[1].? +% cpu.x_register),
                     .ZeroPageY => cpu.safeBusRead(operands[1].? +% cpu.y_register),
-                    // Unfinished TODO: Store the vector in addition to the final address
                     .Indirect => blk: {
                         const vector_address = @as(u16, operands[2].?) << 8 | operands[1].?;
-                        break :blk (@as(u16, cpu.safeBusRead(vector_address +% 1)) << 8) | cpu.safeBusRead(vector_address);
+                        break :blk @as(u16, cpu.safeBusRead(
+                            (vector_address & 0xFF00 | @as(u8, @intCast(vector_address & 0x00FF)) +% 1)
+                        )) << 8 | cpu.safeBusRead(vector_address);
                     },
                     .Relative => if (operands[1].? >> 7 > 0) pc + meta.len -% (operands[1].? & 0x7F) else pc + meta.len +% (operands[1].? & 0x7F),
                     else => null
@@ -100,7 +100,7 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
                     },
                     .IndirectY => {
                         dis.vector = @as(u16, cpu.safeBusRead(operands[1].? +% 1)) << 8 | cpu.safeBusRead(operands[1].?);
-                        dis.value_at_address = cpu.safeBusRead(dis.vector.?) +% cpu.y_register;
+                        dis.value_at_address = cpu.safeBusRead(dis.vector.? +% cpu.y_register);
                     },
                     else => {}
                 }
