@@ -862,20 +862,9 @@ pub fn CPU(Bus: type) type {
         }
 
         pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            const pneumonic = if (instr.getMetadata(self.instruction_register)) |m| m.pneumonic else "<UNKNOWN>";
             try writer.print(
-                "T{d}; A=0x{X:0>2}, X=0x{X:0>2}, Y=0x{X:0>2}, PC=0x{X:0>4}, SP=0x{X:0>2}, IR=0x{X:0>2}({s}), S=0x{X:0>2}",
-                .{
-                    self.current_instruction_cycle,
-                    self.a_register,
-                    self.x_register,
-                    self.y_register,
-                    self.program_counter -% 1   ,
-                    self.stack_pointer,
-                    self.instruction_register,
-                    pneumonic,
-                    self.status_register
-                }
+                "A:{X:0>2} X:{X:0>2} Y:{X:0>2} P:{X:0>2} SP:{X:0>2}",
+                .{self.a_register, self.x_register, self.y_register, self.status_register, self.stack_pointer}
             );
         }
 

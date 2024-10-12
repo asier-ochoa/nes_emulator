@@ -67,24 +67,43 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
                 .cycles = meta.cycles,
                 .op_codes = operands,
                 .addressing = meta.addressing,
-                .value_at_address = if (inner_opt == .current_instruction) switch (meta.addressing) {
-                    .Absolute => cpu.safeBusRead(@as(u16, operands[2].?) << 8 & operands[1].?),
-                    .AbsoluteX => cpu.safeBusRead((@as(u16, operands[2].?) << 8 & operands[1].?) +% cpu.x_register),
-                    .AbsoluteY => cpu.safeBusRead((@as(u16, operands[2].?) << 8 & operands[1].?) +% cpu.y_register),
+                .value_at_address = if (inner_opt == .current_instruction and inner_opt.current_instruction.record_state) switch (meta.addressing) {
+                    .Absolute => if (operands[0].? != proc.instr.JSRabs.op and operands[0].? != proc.instr.JMPabs.op)
+                        cpu.safeBusRead(@as(u16, operands[2].?) << 8 | operands[1].?)
+                        else null
+                    ,
+                    .AbsoluteX => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.x_register),
+                    .AbsoluteY => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.y_register),
                     .ZeroPage => cpu.safeBusRead(operands[1].?),
                     .ZeroPageX => cpu.safeBusRead(operands[1].? +% cpu.x_register),
                     .ZeroPageY => cpu.safeBusRead(operands[1].? +% cpu.y_register),
+                    // Unfinished TODO: Store the vector in addition to the final address
                     .Indirect => blk: {
-                        const vector_address = @as(u16, operands[2].?) << 8 & operands[1].?;
-                        const vector = (@as(u16, cpu.safeBusRead(vector_address +% 1)) << 8) & cpu.safeBusRead(vector_address);
-                        break :blk (@as(u16, cpu.safeBusRead(vector +% 1)) << 8) & cpu.safeBusRead(vector);
+                        const vector_address = @as(u16, operands[2].?) << 8 | operands[1].?;
+                        break :blk (@as(u16, cpu.safeBusRead(vector_address +% 1)) << 8) | cpu.safeBusRead(vector_address);
                     },
+                    .Relative => if (operands[1].? >> 7 > 0) pc + meta.len -% (operands[1].? & 0x7F) else pc + meta.len +% (operands[1].? & 0x7F),
                     else => null
                 } else null
             };
-            if (inner_opt == .current_instruction) {
-                if (meta.addressing == .AbsoluteX or meta.addressing == .ZeroPageX) dis.x_value = cpu.x_register;
-                if (meta.addressing == .AbsoluteY or meta.addressing == .ZeroPageY) dis.y_value = cpu.y_register;
+            if (inner_opt == .current_instruction and inner_opt.current_instruction.record_state) {
+                switch (meta.addressing) {
+                    .AbsoluteX, .ZeroPageX, .IndirectX => dis.x_value = cpu.x_register,
+                    .AbsoluteY, .ZeroPageY, .IndirectY => dis.y_value = cpu.y_register,
+                    else => {}
+                }
+                switch (meta.addressing) {
+                    .IndirectX => {
+                        const vector_address = operands[1].? +% cpu.x_register;
+                        dis.vector = @as(u16, cpu.safeBusRead(vector_address +% 1)) << 8 | cpu.safeBusRead(vector_address);
+                        dis.value_at_address = cpu.safeBusRead(dis.vector.?);
+                    },
+                    .IndirectY => {
+                        dis.vector = @as(u16, cpu.safeBusRead(operands[1].? +% 1)) << 8 | cpu.safeBusRead(operands[1].?);
+                        dis.value_at_address = cpu.safeBusRead(dis.vector.?) +% cpu.y_register;
+                    },
+                    else => {}
+                }
             }
             return dis;
         },
@@ -103,36 +122,47 @@ const InstructionDissasembly = struct {
     // which option is used to generate dissasembly
     value_at_address: ?u16,
     x_value: ?u8 = null,  // Recorded only for x indexed addressing modes
-    y_value: ?u8 = null,  // Recorded only for x indexed addressing modes
+    y_value: ?u8 = null,  // Recorded only for y indexed addressing modes
+    vector: ?u16 = null,  // Recorded only indirect addressing modes
 
     // 6502 assembly format
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        // Write pneumonic. |LDA|
-        _ = try writer.write(self.pneumonic);
+    // Formatted in HHLL
+    // Everything is in HEX
+    // Relative jumps are translated to absolute if value_at_address is present
+    pub fn format(self: @This(), comptime _: []const u8, opt: std.fmt.FormatOptions, writer: anytype) !void {
+        // Buffer to allow for counting bytes
+        var buf = [_]u8{0} ** 32;
+        var count: usize = 0;
 
-        // Write addressing mode symbol |LDA ($|
+        // Write pneumonic. |LDA|
+        count += try writer.write(self.pneumonic);
+
+        // Write addressing mode symbol |LDA $|
         switch (self.addressing) {
-            .Accumulator => _ = try writer.write(" A"),
+            .Accumulator => count += try writer.write(" A"),
             .Absolute, .AbsoluteX, .AbsoluteY,
             .ZeroPage, .ZeroPageX, .ZeroPageY,
-            .Relative => _ = try writer.write(" $"),
-            .Immediate => _ = try writer.write(" #$"),
-            .Indirect, .IndirectX, .IndirectY => _ = try writer.write(" ($"),
+            .Relative => count += try writer.write(" $"),
+            .Immediate => count += try writer.write(" #$"),
+            .Indirect, .IndirectX, .IndirectY => count += try writer.write(" ($"),
             else => {}
         }
 
         // Write operand |LDA ($12AE| in Big endian
         switch (self.addressing) {
             .Absolute, .AbsoluteX, .AbsoluteY,
-            .Indirect => _ = try writer.print("{X:0>4}", .{(@as(u16, self.op_codes[2].?) << 8 & self.op_codes[1].?)}),
+            .Indirect => count += try writer.write(try std.fmt.bufPrint(&buf, "{X:0>4}", .{(@as(u16, self.op_codes[2].?) << 8) | self.op_codes[1].?})),
             .Immediate, .IndirectX, .IndirectY,
-            .Relative, .ZeroPage, .ZeroPageX,
-            .ZeroPageY => _ = try writer.print("{X:0>2}", .{self.op_codes[1].?}),
+            .ZeroPage, .ZeroPageX,
+            .ZeroPageY => count += try writer.write(try std.fmt.bufPrint(&buf, "{X:0>2}", .{self.op_codes[1].?})),
+            .Relative => if (self.value_at_address) |v| {
+                count += try writer.write(try std.fmt.bufPrint(&buf, "{X:0>4}", .{v}));
+            } else {count += try writer.write(try std.fmt.bufPrint(&buf, "{X:0>2}", .{self.op_codes[1].?}));},
             else => {}
         }
 
-        // Write terminator |LDA ($12AE)|
-        _ = try writer.write(switch (self.addressing) {
+        // Write terminator |LDA $12AE,X|
+        count += try writer.write(switch (self.addressing) {
             .AbsoluteX => ",X",
             .AbsoluteY => ",Y",
             .Indirect => ")",
@@ -142,5 +172,26 @@ const InstructionDissasembly = struct {
             .ZeroPageY => ",Y",
             else => ""
         });
+
+        // Write value at address |LDA $12AE,X @ 12BD = 68| if the data is present
+        if (self.value_at_address) |v| {
+            switch (self.addressing) {
+                .Absolute, .ZeroPage => count += try writer.write(try std.fmt.bufPrint(&buf, " = {X:0>2}", .{v})),
+                .AbsoluteX => count += try writer.write(try std.fmt.bufPrint(&buf, " @ {X:0>4} = {X:0>2}", .{(@as(u16, self.op_codes[2].?) << 8 | self.op_codes[1].?) +% self.x_value.?, v})),
+                .AbsoluteY => count += try writer.write(try std.fmt.bufPrint(&buf, " @ {X:0>4} = {X:0>2}", .{(@as(u16, self.op_codes[2].?) << 8 | self.op_codes[1].?) +% self.y_value.?, v})),
+                .ZeroPageX => count += try writer.write(try std.fmt.bufPrint(&buf, " @ {X:0>2} = {X:0>2}", .{self.op_codes[1].? +% self.x_value.?, v})),
+                .ZeroPageY => count += try writer.write(try std.fmt.bufPrint(&buf, " @ {X:0>2} = {X:0>2}", .{self.op_codes[1].? +% self.y_value.?, v})),
+                .Indirect => count += try writer.write(try std.fmt.bufPrint(&buf, " = {X:0>4}", .{v})),
+                .IndirectX => count += try writer.write(try std.fmt.bufPrint(&buf, " @ {X:0>2} = {X:0>4} = {X:0>2}", .{self.x_value.? +% self.op_codes[1].?, self.vector.?, v})),
+                .IndirectY => count += try writer.write(try std.fmt.bufPrint(&buf, " = {X:0>4} @ {X:0>4} = {X:0>2}", .{self.vector.?, self.vector.? +% self.y_value.?, v})),
+                else => {}
+            }
+        }
+
+        if (opt.width) |w| {
+            var unicode_buf = [_]u8{0} ** 7;
+            const unicode_len = try std.unicode.utf8Encode(opt.fill, &unicode_buf);
+            try writer.writeBytesNTimes(unicode_buf[0..unicode_len], w - count);
+        }
     }
 };
