@@ -9,6 +9,7 @@
 const proc = @import("6502.zig");
 const std = @import("std");
 const builtin = @import("builtin");
+const util = @import("util.zig");
 
 const DissasemblyError = error {
     invalid_opcode
@@ -32,11 +33,11 @@ const DissassemblyOptionsTag = enum {
 const DissassemblyOptions = union(DissassemblyOptionsTag) {
     current_instruction: struct {record_state: bool = true},
     single_instruction: struct {address: u16},
-    slice: struct {memory: []const u8, alloc: *std.mem.Allocator},
+    slice: struct {memory: []const u8, alloc: std.mem.Allocator},
     from_to: struct {
         start: u16,
         end: u16,
-        alloc: *std.mem.Allocator
+        alloc: std.mem.Allocator
     }
 };
 
@@ -45,69 +46,112 @@ const DissassemblyOptions = union(DissassemblyOptionsTag) {
 // help a future "stepping" function for the debugger. I could also implement stepping by checking for cpu.endInstruction()
 pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt: anytype) switch (opt_kind) {
     .current_instruction, .single_instruction => DissasemblyError!InstructionDissasembly,
-    else => DissasemblyError![]InstructionDissasembly
+    else => anyerror![]InstructionDissasembly
 } {
     const inner_opt = @unionInit(DissassemblyOptions, @tagName(opt_kind), opt);
 
-    switch (inner_opt) {
-        .current_instruction, .single_instruction => {
-            const pc = if (inner_opt == .current_instruction) cpu.program_counter else opt.address;
-            const op_c = cpu.safeBusRead(pc);
+    // Used to denote currently pointed to memory
+    var mem_idx: usize = switch (opt_kind) {
+        .current_instruction, .single_instruction => 0,
+        .from_to => inner_opt.from_to.start,
+        .slice => 0,
+    };
 
-            const meta = proc.instr.getMetadata(op_c) orelse return DissasemblyError.invalid_opcode;
-            const operands = [_]?u8{
-                op_c,
-                if (meta.len > 1) cpu.safeBusRead(pc +% 1) else null,
-                if (meta.len > 2) cpu.safeBusRead(pc +% 2) else null
-            };
-            var dis: InstructionDissasembly = .{
-                .pc = pc,
-                .len = meta.len,
-                .pneumonic = meta.pneumonic,
-                .cycles = meta.cycles,
-                .op_codes = operands,
-                .addressing = meta.addressing,
-                .value_at_address = if (inner_opt == .current_instruction and inner_opt.current_instruction.record_state) switch (meta.addressing) {
-                    .Absolute => if (operands[0].? != proc.instr.JSRabs.op and operands[0].? != proc.instr.JMPabs.op)
-                        cpu.safeBusRead(@as(u16, operands[2].?) << 8 | operands[1].?)
-                        else null,
-                    .AbsoluteX => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.x_register),
-                    .AbsoluteY => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.y_register),
-                    .ZeroPage => cpu.safeBusRead(operands[1].?),
-                    .ZeroPageX => cpu.safeBusRead(operands[1].? +% cpu.x_register),
-                    .ZeroPageY => cpu.safeBusRead(operands[1].? +% cpu.y_register),
-                    .Indirect => blk: {
-                        const vector_address = @as(u16, operands[2].?) << 8 | operands[1].?;
-                        break :blk @as(u16, cpu.safeBusRead(
-                            (vector_address & 0xFF00 | @as(u8, @intCast(vector_address & 0x00FF)) +% 1)
-                        )) << 8 | cpu.safeBusRead(vector_address);
-                    },
-                    .Relative => if (operands[1].? >> 7 > 0) pc + meta.len -% (operands[1].? & 0x7F) else pc + meta.len +% (operands[1].? & 0x7F),
-                    else => null
-                } else null
-            };
-            if (inner_opt == .current_instruction and inner_opt.current_instruction.record_state) {
-                switch (meta.addressing) {
-                    .AbsoluteX, .ZeroPageX, .IndirectX => dis.x_value = cpu.x_register,
-                    .AbsoluteY, .ZeroPageY, .IndirectY => dis.y_value = cpu.y_register,
-                    else => {}
-                }
-                switch (meta.addressing) {
-                    .IndirectX => {
-                        const vector_address = operands[1].? +% cpu.x_register;
-                        dis.vector = @as(u16, cpu.safeBusRead(vector_address +% 1)) << 8 | cpu.safeBusRead(vector_address);
-                        dis.value_at_address = cpu.safeBusRead(dis.vector.?);
-                    },
-                    .IndirectY => {
-                        dis.vector = @as(u16, cpu.safeBusRead(operands[1].? +% 1)) << 8 | cpu.safeBusRead(operands[1].?);
-                        dis.value_at_address = cpu.safeBusRead(dis.vector.? +% cpu.y_register);
-                    },
-                    else => {}
-                }
+    var buf = std.ArrayListUnmanaged(InstructionDissasembly){};
+
+    while (true) {
+        const pc = switch (inner_opt) {
+            .current_instruction => if (opt_kind == .current_instruction) cpu.program_counter else unreachable,
+            .single_instruction => |o| o.address,
+            .slice => 0,  // Todo: Change to have pc base at start of memory
+            .from_to => unreachable // TODO
+        };
+        const op_c = switch (inner_opt) {
+            .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusRead(pc) else unreachable,
+            .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusRead(o.address) else unreachable,
+            .slice => |o| o.memory[mem_idx],
+            .from_to => if (opt_kind == .from_to) cpu.safeBusRead(mem_idx) else unreachable
+        };
+        mem_idx += 1;
+
+        errdefer std.debug.print("Error: Invalid op: 0x{X:0>2}\n", .{op_c});
+        const meta = proc.instr.getMetadata(op_c) orelse return DissasemblyError.invalid_opcode;
+        const operands = [_]?u8{
+            op_c,
+            if (meta.len > 1) blk: {
+                defer mem_idx += 1;
+                break :blk switch (inner_opt) {
+                    .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusRead(pc +% 1) else unreachable,
+                    .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusRead(o.address +% 1) else unreachable,
+                    .slice => |o| o.memory[mem_idx],
+                    .from_to => if (opt_kind == .from_to) cpu.safeBusRead(mem_idx) else unreachable
+                };
+            } else null,
+            if (meta.len > 2) blk: {
+                defer mem_idx += 1;
+                break :blk switch (inner_opt) {
+                    .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusRead(pc +% 2) else unreachable,
+                    .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusRead(o.address +% 2) else unreachable,
+                    .slice => |o| o.memory[mem_idx],
+                    .from_to => if (opt_kind == .from_to) cpu.safeBusRead(mem_idx) else unreachable
+                };
+            } else null,
+        };
+        var dis: InstructionDissasembly = .{
+            .pc = pc,
+            .len = meta.len,
+            .pneumonic = meta.pneumonic,
+            .cycles = meta.cycles,
+            .op_codes = operands,
+            .addressing = meta.addressing,
+            .value_at_address = if (opt_kind == .current_instruction and inner_opt == .current_instruction and inner_opt.current_instruction.record_state) switch (meta.addressing) {
+                .Absolute => if (operands[0].? != proc.instr.JSRabs.op and operands[0].? != proc.instr.JMPabs.op)
+                    cpu.safeBusRead(@as(u16, operands[2].?) << 8 | operands[1].?)
+                    else null,
+                .AbsoluteX => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.x_register),
+                .AbsoluteY => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.y_register),
+                .ZeroPage => cpu.safeBusRead(operands[1].?),
+                .ZeroPageX => cpu.safeBusRead(operands[1].? +% cpu.x_register),
+                .ZeroPageY => cpu.safeBusRead(operands[1].? +% cpu.y_register),
+                .Indirect => blk: {
+                    const vector_address = @as(u16, operands[2].?) << 8 | operands[1].?;
+                    break :blk @as(u16, cpu.safeBusRead(
+                        (vector_address & 0xFF00 | @as(u8, @intCast(vector_address & 0x00FF)) +% 1)
+                    )) << 8 | cpu.safeBusRead(vector_address);
+                },
+                .Relative => if (operands[1].? >> 7 > 0) pc + meta.len -% (operands[1].? & 0x7F) else pc + meta.len +% (operands[1].? & 0x7F),
+                else => null
+            } else null
+        };
+        if (opt_kind == .current_instruction and inner_opt == .current_instruction and inner_opt.current_instruction.record_state) {
+            if (inner_opt.current_instruction.record_state) {}
+            switch (meta.addressing) {
+                .AbsoluteX, .ZeroPageX, .IndirectX => dis.x_value = cpu.x_register,
+                .AbsoluteY, .ZeroPageY, .IndirectY => dis.y_value = cpu.y_register,
+                else => {}
+            }
+            switch (meta.addressing) {
+                .IndirectX => {
+                    const vector_address = operands[1].? +% cpu.x_register;
+                    dis.vector = @as(u16, cpu.safeBusRead(vector_address +% 1)) << 8 | cpu.safeBusRead(vector_address);
+                    dis.value_at_address = cpu.safeBusRead(dis.vector.?);
+                },
+                .IndirectY => {
+                    dis.vector = @as(u16, cpu.safeBusRead(operands[1].? +% 1)) << 8 | cpu.safeBusRead(operands[1].?);
+                    dis.value_at_address = cpu.safeBusRead(dis.vector.? +% cpu.y_register);
+                },
+                else => {}
             }
             return dis;
-        },
-        else => unreachable
+        }
+        // Allocate memory for dissasembly
+        switch (opt_kind) {
+            .from_to, .slice => try buf.append(@field(opt, "alloc"), dis),
+            else => {}
+        }
+        if (opt_kind == .slice and mem_idx >= inner_opt.slice.memory.len) {
+            return try buf.toOwnedSlice(inner_opt.slice.alloc);
+        }
     }
 }
 
@@ -195,3 +239,30 @@ const InstructionDissasembly = struct {
         }
     }
 };
+
+test "Slice Dissasembly" {
+    const test_obj_code = [_]u8{0xAD, 0x16, 0x40, 0x20, 0x00, 0x43, 0xA0, 0x20, 0x91, 0x69, 0xAA, 0x1D, 0xA1, 0x1A};
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const alloc = arena.allocator();
+    
+    var buf = std.ArrayList(u8).init(alloc);
+    const buf_writer = buf.writer();
+
+    const dis = try dissasemble(.{}, .slice, .{.memory = &test_obj_code, .alloc = alloc});
+
+    for (dis) |d| {
+        try buf_writer.print("{any}\n", .{d});
+    }
+
+    try std.testing.expectEqualStrings(
+        \\LDA $4016
+        \\JSR $4300
+        \\LDY #$20
+        \\STA ($69),Y
+        \\TAX
+        \\ORA $1AA1,X
+        \\
+        , buf.items
+    );
+}
