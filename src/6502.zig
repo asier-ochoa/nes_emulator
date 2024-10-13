@@ -136,8 +136,8 @@ pub fn CPU(Bus: type) type {
                                 instr.ANDimm.op => self.loadRegister(.A, self.a_register & self.safeBusRead(self.program_counter)),
                                 instr.ORAimm.op => self.loadRegister(.A, self.a_register | self.safeBusRead(self.program_counter)),
                                 instr.EORimm.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.program_counter)),
-                                instr.ADCimm.op => self.addWithCarry(self.safeBusRead(self.program_counter), false),
-                                instr.SBCimm.op => self.addWithCarry(~self.safeBusRead(self.program_counter), true),
+                                instr.ADCimm.op => self.addWithCarry(self.safeBusRead(self.program_counter)),
+                                instr.SBCimm.op => self.addWithCarry(~self.safeBusRead(self.program_counter)),
                                 instr.CPYimm.op => self.setCompareFlags(.Y, self.safeBusRead(self.program_counter)),
                                 instr.CPXimm.op => self.setCompareFlags(.X, self.safeBusRead(self.program_counter)),
                                 instr.CMPimm.op => self.setCompareFlags(.A, self.safeBusRead(self.program_counter)),
@@ -254,8 +254,8 @@ pub fn CPU(Bus: type) type {
                                 instr.ORAzpg.op => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
                                 instr.ANDzpg.op => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
                                 instr.EORzpg.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
-                                instr.ADCzpg.op => self.addWithCarry(self.safeBusRead(self.data_latch), false),
-                                instr.SBCzpg.op => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
+                                instr.ADCzpg.op => self.addWithCarry(self.safeBusRead(self.data_latch)),
+                                instr.SBCzpg.op => self.addWithCarry(~self.safeBusRead(self.data_latch)),
                                 instr.CPXzpg.op => self.setCompareFlags(.X, self.safeBusRead(self.data_latch)),
                                 instr.CPYzpg.op => self.setCompareFlags(.Y, self.safeBusRead(self.data_latch)),
                                 else => unreachable
@@ -348,8 +348,8 @@ pub fn CPU(Bus: type) type {
                                 instr.ORAabs.op => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
                                 instr.ANDabs.op => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
                                 instr.EORabs.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
-                                instr.ADCabs.op => self.addWithCarry(self.safeBusRead(self.data_latch), false),
-                                instr.SBCabs.op => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
+                                instr.ADCabs.op => self.addWithCarry(self.safeBusRead(self.data_latch)),
+                                instr.SBCabs.op => self.addWithCarry(~self.safeBusRead(self.data_latch)),
                                 instr.CMPabs.op => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
                                 instr.CPYabs.op => self.setCompareFlags(.Y, self.safeBusRead(self.data_latch)),
                                 instr.CPXabs.op => self.setCompareFlags(.X, self.safeBusRead(self.data_latch)),
@@ -378,8 +378,8 @@ pub fn CPU(Bus: type) type {
                                     instr.ORAabsX.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
                                     instr.ANDabsX.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
                                     instr.EORabsX.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                    instr.ADCabsX.op => self.addWithCarry(self.safeBusRead(final_address), false),
-                                    instr.SBCabsX.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                    instr.ADCabsX.op => self.addWithCarry(self.safeBusRead(final_address)),
+                                    instr.SBCabsX.op => self.addWithCarry(~self.safeBusRead(final_address)),
                                     instr.CMPabsX.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                     else => unreachable
                                 }
@@ -398,8 +398,8 @@ pub fn CPU(Bus: type) type {
                                     instr.ORAabsY.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
                                     instr.ANDabsY.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
                                     instr.EORabsY.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                    instr.ADCabsY.op => self.addWithCarry(self.safeBusRead(final_address), false),
-                                    instr.SBCabsY.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                    instr.ADCabsY.op => self.addWithCarry(self.safeBusRead(final_address)),
+                                    instr.SBCabsY.op => self.addWithCarry(~self.safeBusRead(final_address)),
                                     instr.CMPabsY.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                     else => unreachable,
                                 }
@@ -421,8 +421,8 @@ pub fn CPU(Bus: type) type {
                                 instr.ANDzpgX.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
                                 instr.ORAzpgX.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
                                 instr.EORzpgX.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                instr.SBCzpgX.op => self.addWithCarry(~self.safeBusRead(final_address), true),
-                                instr.ADCzpgX.op => self.addWithCarry(self.safeBusRead(final_address), false),
+                                instr.SBCzpgX.op => self.addWithCarry(~self.safeBusRead(final_address)),
+                                instr.ADCzpgX.op => self.addWithCarry(self.safeBusRead(final_address)),
                                 instr.STYzpgX.op => self.safeBusWrite(final_address, self.y_register),
                                 instr.STAzpgX.op => self.safeBusWrite(final_address, self.a_register),
                                 instr.CMPzpgX.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
@@ -525,8 +525,8 @@ pub fn CPU(Bus: type) type {
                                 instr.ORAabsX.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
                                 instr.ANDabsX.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
                                 instr.EORabsX.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                instr.ADCabsX.op => self.addWithCarry(self.safeBusRead(final_address), false),
-                                instr.SBCabsX.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                instr.ADCabsX.op => self.addWithCarry(self.safeBusRead(final_address)),
+                                instr.SBCabsX.op => self.addWithCarry(~self.safeBusRead(final_address)),
                                 instr.CMPabsX.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                 else => unreachable
                             }
@@ -542,8 +542,8 @@ pub fn CPU(Bus: type) type {
                                 instr.ORAabsY.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_address)),
                                 instr.ANDabsY.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_address)),
                                 instr.EORabsY.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_address)),
-                                instr.ADCabsY.op => self.addWithCarry(self.safeBusRead(final_address), false),
-                                instr.SBCabsY.op => self.addWithCarry(~self.safeBusRead(final_address), true),
+                                instr.ADCabsY.op => self.addWithCarry(self.safeBusRead(final_address)),
+                                instr.SBCabsY.op => self.addWithCarry(~self.safeBusRead(final_address)),
                                 instr.CMPabsY.op => self.setCompareFlags(.A, self.safeBusRead(final_address)),
                                 else => unreachable,
                             }
@@ -589,8 +589,8 @@ pub fn CPU(Bus: type) type {
                                     instr.ORAindY.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_jump)),
                                     instr.ANDindY.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_jump)),
                                     instr.EORindY.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_jump)),
-                                    instr.ADCindY.op => self.addWithCarry(self.safeBusRead(final_jump), false),
-                                    instr.SBCindY.op => self.addWithCarry(~self.safeBusRead(final_jump), true),
+                                    instr.ADCindY.op => self.addWithCarry(self.safeBusRead(final_jump)),
+                                    instr.SBCindY.op => self.addWithCarry(~self.safeBusRead(final_jump)),
                                     instr.CMPindY.op => self.setCompareFlags(.A, self.safeBusRead(final_jump)),
                                     else => unreachable
                                 }
@@ -673,8 +673,8 @@ pub fn CPU(Bus: type) type {
                                 instr.ORAindX.op => self.loadRegister(.A, self.a_register | self.safeBusRead(self.data_latch)),
                                 instr.ANDindX.op => self.loadRegister(.A, self.a_register & self.safeBusRead(self.data_latch)),
                                 instr.EORindX.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(self.data_latch)),
-                                instr.ADCindX.op => self.addWithCarry(self.safeBusRead(self.data_latch), false),
-                                instr.SBCindX.op => self.addWithCarry(~self.safeBusRead(self.data_latch), true),
+                                instr.ADCindX.op => self.addWithCarry(self.safeBusRead(self.data_latch)),
+                                instr.SBCindX.op => self.addWithCarry(~self.safeBusRead(self.data_latch)),
                                 instr.CMPindX.op => self.setCompareFlags(.A, self.safeBusRead(self.data_latch)),
                                 else => unreachable
                             }
@@ -689,8 +689,8 @@ pub fn CPU(Bus: type) type {
                                 instr.ORAindY.op => self.loadRegister(.A, self.a_register | self.safeBusRead(final_jump)),
                                 instr.ANDindY.op => self.loadRegister(.A, self.a_register & self.safeBusRead(final_jump)),
                                 instr.EORindY.op => self.loadRegister(.A, self.a_register ^ self.safeBusRead(final_jump)),
-                                instr.ADCindY.op => self.addWithCarry(self.safeBusRead(final_jump), false),
-                                instr.SBCindY.op => self.addWithCarry(~self.safeBusRead(final_jump), true),
+                                instr.ADCindY.op => self.addWithCarry(self.safeBusRead(final_jump)),
+                                instr.SBCindY.op => self.addWithCarry(~self.safeBusRead(final_jump)),
                                 instr.CMPindY.op => self.setCompareFlags(.A, self.safeBusRead(final_jump)),
                                 else => unreachable
                             }
@@ -821,7 +821,7 @@ pub fn CPU(Bus: type) type {
             self.safeBusWrite(at,  if (!dec) val +% 1 else val -% 1);
         }
 
-        fn addWithCarry(self: *Self, value: u8, _: bool) void {
+        fn addWithCarry(self: *Self, value: u8) void {
             const carry = self.status_register & 0b1;
             const res = self.a_register +% value +% carry;
 
@@ -851,6 +851,13 @@ pub fn CPU(Bus: type) type {
 
         pub inline fn safeBusRead(self: Self, address: u16) u8 {
             return self.bus.cpuRead(address) catch blk: {
+                logger.warn("Unmapped read from address 0x{X:0>4}, returning 0\n", .{address});
+                break :blk 0;
+            };
+        }
+
+        pub inline fn safeBusReadConst(self: Self, address: u16) u8 {
+            return self.bus.cpuReadConst(address) catch blk: {
                 logger.warn("Unmapped read from address 0x{X:0>4}, returning 0\n", .{address});
                 break :blk 0;
             };

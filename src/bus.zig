@@ -11,7 +11,7 @@ pub fn Bus(SuppliedMMap: type) type {
 
         // Represents the entire address space of the CPU
         // Each member can be:
-        // - A struct instance with a onRead and onWrite function
+        // - A struct instance with a onRead, onWrite and onReadConst function
         //  - If the struct contains a "bus"
         // - A var array representing read and write memory
         // The name of the member must denote the address range in the following format:
@@ -34,7 +34,25 @@ pub fn Bus(SuppliedMMap: type) type {
                     return switch (@typeInfo(field.type)) {
                         .Struct => @field(self.memory_map, field.name).onRead(address, &self.memory_map),
                         .Array => @field(self.memory_map, field.name)[address - bounds.lower],
-                        else => 0
+                        else => unreachable
+                    };
+                }
+            }
+            logger.warn("Illegal read at 0x{X:0>4}\n", .{address});
+            return BusError.UnmappedRead;
+        }
+
+        // Reads from bus but guarantees onRead methods won't have side effects
+        pub fn cpuReadConst(self: Self, address: u16) BusError!u8 {
+            inline for (@typeInfo(MemoryMap).Struct.fields) |field| {
+                const bounds = comptime blk: {
+                    break :blk extractBoundsFromMemoryRegionName(field.name) catch unreachable;
+                };
+                if (address >= bounds.lower and address <= bounds.upper) {
+                    return switch (@typeInfo(field.type)) {
+                        .Struct => @field(self.memory_map, field.name).onReadConst(address, @as(*const MemoryMap, &self.memory_map)),
+                        .Array => @field(self.memory_map, field.name)[address - bounds.lower],
+                        else => unreachable
                     };
                 }
             }
@@ -53,7 +71,7 @@ pub fn Bus(SuppliedMMap: type) type {
                     switch (@typeInfo(field.type)) {
                         .Struct => @field(self.memory_map, field.name).onWrite(address, data, &self.memory_map),
                         .Array => @field(self.memory_map, field.name)[address - bounds.lower] = data,
-                        else => 0
+                        else => unreachable
                     }
                     return;
                 }
@@ -66,10 +84,10 @@ pub fn Bus(SuppliedMMap: type) type {
         // - Not have any overlapping memory sections
         // - Field name must follow the given format
         // - Upper bound > lower bound
-        // - Have all fields that are of struct type, have one "onRead" and one "onWrite" method
-        //      - 1st argument must be a pointer to @This()
+        // - Have all fields that are of struct type, have one "onRead", one "onWrite", and one "onReadConst" method
+        //      - 1st argument must be a pointer to @This(), const for the const variant
         //      - 2nd argument must be a u16 address
-        //      - last address must be anytype and holds a pointer to the mmap
+        //      - last address must be anytype and holds a pointer to the mmap, const for the const variant
         //      - 3rd argument for onWrite must be a u8 data value to be written
         //      - return type for onRead must be a u8 data value to be read
         // - Arrays must represent their bound's size
@@ -94,7 +112,7 @@ pub fn Bus(SuppliedMMap: type) type {
                     switch (@typeInfo(field.type)) {
                         // Check struct can respond to reads and writes
                         .Struct => if (!memoryRegionReadableAndWriteableCheck(field.type)) @compileError(
-                            "Memory region \"" ++ field.name ++ "\" is missing an onWrite or onRead method" ++
+                            "Memory region \"" ++ field.name ++ "\" is missing an onWrite, onRead or onReadConst method" ++
                             " with the signatures \"fn (@This(), u16, u8, anytype) void\" and \"fn (@This(), u16, anytype) u8\""
                         ),
                         // Check array is properly sized
@@ -158,9 +176,10 @@ pub fn Bus(SuppliedMMap: type) type {
         }
 
         fn memoryRegionReadableAndWriteableCheck(region_type: type) bool {
-            if (!@hasDecl(region_type, "onRead") or !@hasDecl(region_type, "onWrite")) return false;
+            if (!@hasDecl(region_type, "onRead") or !@hasDecl(region_type, "onWrite") or !@hasDecl(region_type, "onReadConst")) return false;
             return @TypeOf(@field(region_type, "onRead")) == fn (*region_type, u16, anytype) u8 and
-            @TypeOf(@field(region_type, "onWrite")) == fn (*region_type, u16, u8, anytype) void;
+            @TypeOf(@field(region_type, "onWrite")) == fn (*region_type, u16, u8, anytype) void and
+            @TypeOf(@field(region_type, "onReadConst")) == fn (region_type, u16, anytype) u8;
         }
 
         const MemoryError = error {

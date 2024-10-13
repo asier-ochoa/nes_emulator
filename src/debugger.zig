@@ -60,17 +60,17 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
     var buf = std.ArrayListUnmanaged(InstructionDissasembly){};
 
     while (true) {
-        const pc = switch (inner_opt) {
+        const pc: u16 = switch (inner_opt) {
             .current_instruction => if (opt_kind == .current_instruction) cpu.program_counter else unreachable,
             .single_instruction => |o| o.address,
-            .slice => 0,  // Todo: Change to have pc base at start of memory
+            .slice => @intCast(mem_idx & 0xFFFF),  // Todo: Change to have pc base at start of memory
             .from_to => unreachable // TODO
         };
         const op_c = switch (inner_opt) {
-            .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusRead(pc) else unreachable,
-            .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusRead(o.address) else unreachable,
+            .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusReadConst(pc) else unreachable,
+            .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusReadConst(o.address) else unreachable,
             .slice => |o| o.memory[mem_idx],
-            .from_to => if (opt_kind == .from_to) cpu.safeBusRead(mem_idx) else unreachable
+            .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(mem_idx) else unreachable
         };
         mem_idx += 1;
 
@@ -81,19 +81,19 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
             if (meta.len > 1) blk: {
                 defer mem_idx += 1;
                 break :blk switch (inner_opt) {
-                    .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusRead(pc +% 1) else unreachable,
-                    .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusRead(o.address +% 1) else unreachable,
+                    .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusReadConst(pc +% 1) else unreachable,
+                    .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusReadConst(o.address +% 1) else unreachable,
                     .slice => |o| o.memory[mem_idx],
-                    .from_to => if (opt_kind == .from_to) cpu.safeBusRead(mem_idx) else unreachable
+                    .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(mem_idx) else unreachable
                 };
             } else null,
             if (meta.len > 2) blk: {
                 defer mem_idx += 1;
                 break :blk switch (inner_opt) {
-                    .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusRead(pc +% 2) else unreachable,
-                    .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusRead(o.address +% 2) else unreachable,
+                    .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusReadConst(pc +% 2) else unreachable,
+                    .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusReadConst(o.address +% 2) else unreachable,
                     .slice => |o| o.memory[mem_idx],
-                    .from_to => if (opt_kind == .from_to) cpu.safeBusRead(mem_idx) else unreachable
+                    .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(mem_idx) else unreachable
                 };
             } else null,
         };
@@ -106,18 +106,18 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
             .addressing = meta.addressing,
             .value_at_address = if (opt_kind == .current_instruction and inner_opt == .current_instruction and inner_opt.current_instruction.record_state) switch (meta.addressing) {
                 .Absolute => if (operands[0].? != proc.instr.JSRabs.op and operands[0].? != proc.instr.JMPabs.op)
-                    cpu.safeBusRead(@as(u16, operands[2].?) << 8 | operands[1].?)
+                    cpu.safeBusReadConst(@as(u16, operands[2].?) << 8 | operands[1].?)
                     else null,
-                .AbsoluteX => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.x_register),
-                .AbsoluteY => cpu.safeBusRead((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.y_register),
-                .ZeroPage => cpu.safeBusRead(operands[1].?),
-                .ZeroPageX => cpu.safeBusRead(operands[1].? +% cpu.x_register),
-                .ZeroPageY => cpu.safeBusRead(operands[1].? +% cpu.y_register),
+                .AbsoluteX => cpu.safeBusReadConst((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.x_register),
+                .AbsoluteY => cpu.safeBusReadConst((@as(u16, operands[2].?) << 8 | operands[1].?) +% cpu.y_register),
+                .ZeroPage => cpu.safeBusReadConst(operands[1].?),
+                .ZeroPageX => cpu.safeBusReadConst(operands[1].? +% cpu.x_register),
+                .ZeroPageY => cpu.safeBusReadConst(operands[1].? +% cpu.y_register),
                 .Indirect => blk: {
                     const vector_address = @as(u16, operands[2].?) << 8 | operands[1].?;
-                    break :blk @as(u16, cpu.safeBusRead(
+                    break :blk @as(u16, cpu.safeBusReadConst(
                         (vector_address & 0xFF00 | @as(u8, @intCast(vector_address & 0x00FF)) +% 1)
-                    )) << 8 | cpu.safeBusRead(vector_address);
+                    )) << 8 | cpu.safeBusReadConst(vector_address);
                 },
                 .Relative => if (operands[1].? >> 7 > 0) pc + meta.len -% (operands[1].? & 0x7F) else pc + meta.len +% (operands[1].? & 0x7F),
                 else => null
@@ -133,12 +133,12 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
             switch (meta.addressing) {
                 .IndirectX => {
                     const vector_address = operands[1].? +% cpu.x_register;
-                    dis.vector = @as(u16, cpu.safeBusRead(vector_address +% 1)) << 8 | cpu.safeBusRead(vector_address);
-                    dis.value_at_address = cpu.safeBusRead(dis.vector.?);
+                    dis.vector = @as(u16, cpu.safeBusReadConst(vector_address +% 1)) << 8 | cpu.safeBusReadConst(vector_address);
+                    dis.value_at_address = cpu.safeBusReadConst(dis.vector.?);
                 },
                 .IndirectY => {
-                    dis.vector = @as(u16, cpu.safeBusRead(operands[1].? +% 1)) << 8 | cpu.safeBusRead(operands[1].?);
-                    dis.value_at_address = cpu.safeBusRead(dis.vector.? +% cpu.y_register);
+                    dis.vector = @as(u16, cpu.safeBusReadConst(operands[1].? +% 1)) << 8 | cpu.safeBusReadConst(operands[1].?);
+                    dis.value_at_address = cpu.safeBusReadConst(dis.vector.? +% cpu.y_register);
                 },
                 else => {}
             }

@@ -16,6 +16,9 @@ pub const NesBus = Bus.Bus(struct {
         pub fn onRead(_: *Self, address: u16, mmap: anytype) u8 {
             return mmap.@"0000-07FF"[@mod(address, 0x0800)];
         }
+        pub fn onReadConst(_: Self, address: u16, mmap: anytype) u8 {
+            return mmap.@"0000-07FF"[@mod(address, 0x0800)];
+        }
         pub fn onWrite(_: *Self, address: u16, data: u8, mmap: anytype) void {
             mmap.@"0000-07FF"[@mod(address, 0x0800)] = data;
         }
@@ -25,11 +28,17 @@ pub const NesBus = Bus.Bus(struct {
         pub fn onRead(_: *Self, _: u16, _: anytype) u8 {
             return 0;
         }
+        pub fn onReadConst(_: Self, _: u16, _: anytype) u8 {
+            return 0;
+        }
         pub fn onWrite(_: *Self, _: u16, _: u8, _: anytype) void {}
     },
     @"4000-4017": struct {  // APU and I/O registers TODO: implement
         const Self = @This();
         pub fn onRead(_: *Self, _: u16, _: anytype) u8 {
+            return 0;
+        }
+        pub fn onReadConst(_: Self, _: u16, _: anytype) u8 {
             return 0;
         }
         pub fn onWrite(_: *Self, _: u16, _: u8, _: anytype) void {}
@@ -39,12 +48,18 @@ pub const NesBus = Bus.Bus(struct {
         pub fn onRead(_: *Self, _: u16, _: anytype) u8 {
             return 0;
         }
+        pub fn onReadConst(_: Self, _: u16, _: anytype) u8 {
+            return 0;
+        }
         pub fn onWrite(_: *Self, _: u16, _: u8, _: anytype) void {}
     },
     @"4020-FFFF": struct {  // Unmapped, used for cartriges TODO: figure out how to design the mappers
         const Self = @This();
         rom: [0x4000]u8,
         pub fn onRead(self: *Self, address: u16, _: anytype) u8 {
+            return if (address >= 0x8000) self.rom[@mod(address - 0x8000, 0x4000)] else 0;
+        }
+        pub fn onReadConst(self: Self, address: u16, _: anytype) u8 {
             return if (address >= 0x8000) self.rom[@mod(address - 0x8000, 0x4000)] else 0;
         }
         pub fn onWrite(_: *Self, _: u16, _: u8, _: anytype) void {}
