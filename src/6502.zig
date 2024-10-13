@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("util.zig");
 const rom_loader = @import("rom_loader.zig");
 const builtin = @import("builtin");
+const debug = @import("debugger.zig");
 
 pub const logger = std.log.scoped(.CPU);
 
@@ -1233,6 +1234,65 @@ pub const AddressingMode = enum {
     IndirectY
 };
 
-test "Full Instruction Rom" {
-    
+test "Full Instruction Rom (nestest.nes)" {
+    // Declare allocators
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const alloc = arena.allocator();
+
+    // Load roms
+    const nestest_rom = @embedFile("./resources/nestest.nes");
+    const ref_log = @embedFile("./resources/nestest_log_reference.log");
+
+    // Setup CPUs
+    var bus = util.NesBus.init();
+    var cpu = CPU(@TypeOf(bus)).init(&bus);
+    cpu.program_counter = 0xC000;
+    cpu.stack_pointer = 0xFD;
+
+    rom_loader.load_ines_into_bus(nestest_rom, &bus);
+
+    // Setup writer for the execution log
+    var buffer = std.ArrayList(u8).init(alloc);
+    const log_writer = buffer.writer();
+
+    // Setup performance metrics
+    var cycles_executed: usize = 8;
+    const start_time = std.time.microTimestamp();
+    defer {
+        const end_time = std.time.microTimestamp();
+        std.debug.print("{d} cycles executed at a speed of {d:.3} Mhz in {d} ms|", .{
+            cycles_executed,
+            1 / (@as(f64, @floatFromInt(end_time - start_time)) / @as(f64, @floatFromInt(cycles_executed))),
+            @divFloor(end_time - start_time, 1000)
+        });
+    }
+
+    // TODO: Replace this terribleness with proper handling of BRK
+    // Need to do this because the initial BRK is not implemented
+    {
+        const dis = try debug.dissasemble(cpu, .current_instruction, .{.record_state = true});
+        try log_writer.print("{X:0>4}  ", .{dis.pc});
+        for (dis.op_codes) |op| {
+            if (op) |o| try log_writer.print("{X:0>2} ", .{o}) else try log_writer.print("   ", .{});
+        }
+        try log_writer.print(" {any: <32}", .{dis});
+        try log_writer.print("{any} CYC:{}\n", .{cpu, 7});
+    }
+    while (true) : (cycles_executed += 1) {
+        try cpu.tick();
+
+        if (cpu.current_instruction_cycle == 0) {
+            const dis = try debug.dissasemble(cpu, .current_instruction, .{.record_state = true});
+            try log_writer.print("{X:0>4}  ", .{dis.pc});
+            for (dis.op_codes) |op| {
+                if (op) |o| try log_writer.print("{X:0>2} ", .{o}) else try log_writer.print("   ", .{});
+            }
+            try log_writer.print(" {any: <32}", .{dis});
+            try log_writer.print("{any} CYC:{}\n", .{cpu, cycles_executed});
+        }
+
+        // End execution before illegal instructions start
+        if (cycles_executed >= 14575) break;
+    }
+    try std.testing.expectEqualSlices(u8, ref_log, buffer.items);
 }
