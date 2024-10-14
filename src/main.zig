@@ -5,30 +5,40 @@ const util = @import("util.zig");
 const rom_loader = @import("rom_loader.zig");
 const debug = @import("debugger.zig");
 const rl = @import("raylib");
-
-fn readTest(comptime address: u16, bus: anytype) !void {
-    std.debug.print(
-        "Reading from bus at " ++
-        std.fmt.comptimePrint("0x{X:0>4}", .{address}) ++
-        " returns: {d}\n", .{try bus.cpuRead(address)});
-}
+const gui = @import("gui.zig");
 
 pub const std_options = std.Options {
     .log_level = .debug
 };
 
 pub fn main() !void {
-    rl.initWindow(800, 600, "NES Emulator");
-    defer rl.closeWindow();
+    // Initialize CPU
+    var bus = util.NesBus.init();
+    var cpu = CPU.CPU(@TypeOf(bus)).init(&bus);
+    cpu.program_counter = 0xC000;
+    cpu.stack_pointer = 0xFD;
+    cpu.a_register = 0xAC;
 
+    // Initialize GUI state
+    var state: gui.GuiState = .{};
+
+    // Initialize window
+    rl.initWindow(1280, 720, "NES Emulator");
+    defer rl.closeWindow();
     rl.setTargetFPS(rl.getMonitorRefreshRate(0));
 
     while (!rl.windowShouldClose()) {
         {  // Frame drawing scope
-            rl.clearBackground(rl.Color.dark_blue);
             rl.beginDrawing();
-            rl.drawFPS(0, 0);
             defer rl.endDrawing();
+            defer rl.clearBackground(rl.Color.dark_blue);
+
+            rl.drawFPS(0, 0);
+
+            {  // Ui Drawing scope
+                gui.menuBar(&state);
+                gui.cpuStatus(&state, .{.x = 100, .y = 200}, @TypeOf(cpu), &cpu, 0, 0);
+            }
         }
     }
 }
