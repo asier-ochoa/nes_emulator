@@ -10,6 +10,62 @@ const proc = @import("6502.zig");
 const std = @import("std");
 const builtin = @import("builtin");
 const util = @import("util.zig");
+const bus = @import("bus.zig");
+
+const MemoryBreakpoint = struct {
+    address: u16,
+    active: bool
+};
+
+pub const Debugger = struct {
+    const Self = @This();
+    const BreakpointList = std.AutoArrayHashMap(u16, MemoryBreakpoint);
+
+    // Address as key
+    read_breakpoints: BreakpointList,
+    write_breakpoints: BreakpointList,
+    pc_breakpoints: BreakpointList,
+
+    // Sentinel to control if we have to pause, null means no breakpoint has been hit
+    break_hit: ?MemoryBreakpoint = null,
+    pause: bool = false,
+
+    pub fn init(alloc: std.mem.Allocator) Self {
+        return .{
+            .read_breakpoints = BreakpointList.init(alloc),
+            .write_breakpoints = BreakpointList.init(alloc),
+            .pc_breakpoints = BreakpointList.init(alloc)
+        };
+    }
+
+    pub fn attach(self: Self) void {
+        _ = self;
+    }
+
+    pub fn detach(self: Self) void {
+        _ = self;
+    }
+
+    // Called by CPU
+    // Passing the CPU is needed to read directly from bus
+    pub fn checkReadBreakpoints(self: *Self, address: u16, cpu: anytype) !u8 {
+        // Check if this is a program counter read, REQUIRES THAT THE CPU ONLY INCREMENT PC AFTER READING
+        const break_list = if (address == cpu.program_counter) self.pc_breakpoints else self.read_breakpoints;
+        if (break_list.get(address)) |v| {
+            if (v.active) self.break_hit = v;
+        }
+        return cpu.bus.cpuRead(address);
+    }
+
+    // Called by CPU
+    // Passing the CPU is needed to read directly from bus
+    pub fn checkWriteBreakpoints(self: *Self, address: u16, value: u8, cpu: anytype) !void {
+        if (self.write_breakpoints.get(address)) |v| {
+            if (v.active) self.break_hit = v;
+        }
+        return cpu.bus.cpuWrite(address, value);
+    }
+};
 
 const DissasemblyError = error {
     invalid_opcode

@@ -1,17 +1,20 @@
 const rg = @import("raygui");
 const rl = @import("raylib");
 const std = @import("std");
+const debug = @import("debugger.zig");
+
+const input_buf_size = 128 + 1;
 
 pub const GuiState = struct {
-    cpu_status_cpu_running: bool = true,  // If the cpu is currently paused or not to allow for value editing
-    cpu_status_window_active: bool = true,
-    cpu_status_a_register_text: [128]u8 = .{0} ** 128,
+    cpu_status_cpu_running: bool = false,  // If the cpu is currently paused or not to allow for value editing
+    cpu_status_window_active: bool = false,
+    cpu_status_a_register_text: [input_buf_size]u8 = .{0} ** input_buf_size,
     cpu_status_a_register_text_edit: bool = false,
-    cpu_status_x_register_text: [128]u8 = .{0} ** 128,
+    cpu_status_x_register_text: [input_buf_size]u8 = .{0} ** input_buf_size,
     cpu_status_x_register_text_edit: bool = false,
-    cpu_status_y_register_text: [128]u8 = .{0} ** 128,
+    cpu_status_y_register_text: [input_buf_size]u8 = .{0} ** input_buf_size,
     cpu_status_y_register_text_edit: bool = false,
-    cpu_status_pc_text: [128]u8 = .{0} ** 128,
+    cpu_status_pc_text: [input_buf_size]u8 = .{0} ** input_buf_size,
     cpu_status_pc_text_edit: bool = false,
     cpu_status_ir_text: [3]u8 = .{0} ** 3,
     cpu_status_cc_text: [2]u8 = .{0} ** 2,
@@ -24,7 +27,12 @@ pub const GuiState = struct {
     cpu_status_d_flag: bool = false,
     cpu_status_i_flag: bool = false,
     cpu_status_z_flag: bool = false,
-    cpu_status_c_flag: bool = false
+    cpu_status_c_flag: bool = false,
+
+    debugger_window_active: bool = false,
+    debugger_dissasembly_scroll_offset: rl.Vector2 = .{.x = 0, .y = 0},
+    debugger_dissasembly_bounds_offset: rl.Vector2 = .{.x = 0, .y = 0},
+    debugger_dissasembly_scroll_view: rl.Rectangle = .{.x = 0, .y = 0, .width = 0, .height = 0},
 };
 
 const MenuBarItem = enum {
@@ -45,10 +53,11 @@ pub fn menuBar(state: *GuiState) void {
         .x = 8, .y = 8,
         .width = 88, .height = 48
     }, "FILE");
-    _ = rg.guiButton(.{
+    if (rg.guiButton(.{
         .x = 104, .y = 8,
         .width = 88, .height = 48
-    }, "DEBUGGER");
+    }, if (state.debugger_window_active) "> DEBUGGER" else "DEBUGGER") > 0)
+        state.debugger_window_active = !state.debugger_window_active;
     if (rg.guiButton(.{
         .x = 200, .y = 8,
         .width = 88, .height = 48
@@ -58,6 +67,61 @@ pub fn menuBar(state: *GuiState) void {
         .x = 296, .y = 8,
         .width = 88, .height = 48
     }, "MEMORY");
+}
+
+pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugger) void {
+    const anchor = pos;
+    if (state.debugger_window_active) {
+        // TODO: verify cpu has debugger attached, if not, then attach
+
+        // TODO: detatch debugger when closing window
+        if (rg.guiWindowBox(.{
+            .x = anchor.x, .y = anchor.y,
+            .width = 320, .height = 312
+        }, "Debugger") > 0) state.debugger_window_active = false;
+
+        // Resume code execution button
+        if (rg.guiButton(.{
+            .x = anchor.x + 8, .y = anchor.y + 32,
+            .width = 32, .height = 32
+        }, "#131#") > 0) {
+            logic_debugger.pause = false;
+            state.cpu_status_cpu_running = true;
+        }
+
+        // Pause code execution button
+        if (rg.guiButton(.{
+            .x = anchor.x + 48, .y = anchor.y + 32,
+            .width = 32, .height = 32
+        }, "#132#") > 0) {
+            logic_debugger.pause = true;
+            state.cpu_status_cpu_running = false;
+        }
+
+        // Step forward 1 instruction
+        _ = rg.guiButton(.{
+            .x = anchor.x + 8, .y = anchor.y + 72,
+            .width = 72, .height = 24
+        }, "STEP INSTR");
+
+        // Step forwar 1 cycle
+        _ = rg.guiButton(.{
+            .x = anchor.x + 8, .y = anchor.y + 104,
+            .width = 72, .height = 24
+        }, "STEP CYCLE");
+
+        // TODO: Draw some colored text below to indicate the execution status
+
+        // Dissasembly view
+        _ = rg.guiScrollPanel(.{
+            .x = anchor.x + 88, .y = anchor.y + 32,
+            .width = 200 - state.debugger_dissasembly_bounds_offset.x,
+            .height = 272 - state.debugger_dissasembly_bounds_offset.y
+        }, null, .{
+            .x = anchor.x + 88, .y = anchor.y + 32,
+            .width = 200, .height = 272
+        }, &state.debugger_dissasembly_scroll_offset, &state.debugger_dissasembly_scroll_view);
+    }
 }
 
 // Returns if the input box was clicked
@@ -137,20 +201,17 @@ fn statusFlags(state: *GuiState, pos: rl.Vector2, CPU: type, cpu: *const CPU) vo
     }, "C", &state.cpu_status_c_flag);
 }
 
+// TODO: Implement the stack inspector
 pub fn cpuStatus(state: *GuiState, pos: rl.Vector2, CPU: type, cpu: *const CPU, cycle_count: u64, instr_count: u64) void {
     const anchor: rl.Vector2 = pos;
     if (state.cpu_status_window_active) {
         // Update gui state with cpu values
-        _ = std.fmt.bufPrint(state.cpu_status_a_register_text[0..2], "{X:0>2}", .{cpu.a_register}) catch {};
-        _ = std.fmt.bufPrint(state.cpu_status_x_register_text[0..2], "{X:0>2}", .{cpu.x_register}) catch {};
-        _ = std.fmt.bufPrint(state.cpu_status_y_register_text[0..2], "{X:0>2}", .{cpu.y_register}) catch {};
-        _ = std.fmt.bufPrint(state.cpu_status_pc_text[0..4], "{X:0>4}", .{cpu.program_counter}) catch {};
-        _ = std.fmt.bufPrint(state.cpu_status_ir_text[0..2], "{X:0>2}", .{cpu.instruction_register}) catch {};
-        _ = std.fmt.bufPrint(state.cpu_status_cc_text[0..1], "{}", .{cpu.current_instruction_cycle}) catch {};
-        _ = std.fmt.bufPrint(state.cpu_status_cycles_text[0..20], "{}", .{cycle_count}) catch {};
-        _ = std.fmt.bufPrint(state.cpu_status_instr_text[0..20], "{}", .{instr_count}) catch {};
-
         if (state.cpu_status_cpu_running) {
+            _ = std.fmt.bufPrint(state.cpu_status_a_register_text[0..2], "{X:0>2}", .{cpu.a_register}) catch {};
+            _ = std.fmt.bufPrint(state.cpu_status_x_register_text[0..2], "{X:0>2}", .{cpu.x_register}) catch {};
+            _ = std.fmt.bufPrint(state.cpu_status_y_register_text[0..2], "{X:0>2}", .{cpu.y_register}) catch {};
+            _ = std.fmt.bufPrint(state.cpu_status_pc_text[0..4], "{X:0>4}", .{cpu.program_counter}) catch {};
+
             state.cpu_status_n_flag = cpu.isFlagSet(.negative);
             state.cpu_status_v_flag = cpu.isFlagSet(.overflow);
             state.cpu_status_b_flag = cpu.isFlagSet(.brk_command);
@@ -159,7 +220,12 @@ pub fn cpuStatus(state: *GuiState, pos: rl.Vector2, CPU: type, cpu: *const CPU, 
             state.cpu_status_z_flag = cpu.isFlagSet(.zero);
             state.cpu_status_c_flag = cpu.isFlagSet(.carry);
         }
+        _ = std.fmt.bufPrint(state.cpu_status_ir_text[0..2], "{X:0>2}", .{cpu.instruction_register}) catch {};
+        _ = std.fmt.bufPrint(state.cpu_status_cc_text[0..1], "{}", .{cpu.current_instruction_cycle}) catch {};
+        _ = std.fmt.bufPrint(state.cpu_status_cycles_text[0..20], "{}", .{cycle_count}) catch {};
+        _ = std.fmt.bufPrint(state.cpu_status_instr_text[0..20], "{}", .{instr_count}) catch {};
 
+        // Main window
         if (rg.guiWindowBox(.{
             .x = anchor.x, .y = anchor.y,
             .height = 128, .width = 376

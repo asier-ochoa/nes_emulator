@@ -36,6 +36,9 @@ pub fn CPU(Bus: type) type {
         // Bus connection
         bus: *Bus,
 
+        // Debugger connection, required to redirect bus reads to the debugger's breakpoint checking functions
+        debugger: ?*debug.Debugger = null,
+
         pub fn init(bus: *Bus) Self {
             return Self {
                 .bus = bus
@@ -850,12 +853,20 @@ pub fn CPU(Bus: type) type {
         }
 
         pub inline fn safeBusRead(self: Self, address: u16) u8 {
+            // Call debugger breakpoint delegate instead
+            if (self.debugger) |d| {
+                return d.checkReadBreakpoints(address, self) catch blk: {
+                    logger.warn("Unmapped read from address 0x{X:0>4}, returning 0\n", .{address});
+                    break :blk 0;
+                };
+            }
             return self.bus.cpuRead(address) catch blk: {
                 logger.warn("Unmapped read from address 0x{X:0>4}, returning 0\n", .{address});
                 break :blk 0;
             };
         }
 
+        // DO NOT USE FOR ANY EMULATION PURPOSES, AVOID SPAGHETTI!!!!
         pub inline fn safeBusReadConst(self: Self, address: u16) u8 {
             return self.bus.cpuReadConst(address) catch blk: {
                 logger.warn("Unmapped read from address 0x{X:0>4}, returning 0\n", .{address});
@@ -864,6 +875,13 @@ pub fn CPU(Bus: type) type {
         }
 
         inline fn safeBusWrite(self: *Self, address: u16, data: u8) void {
+            // Call debugger breakpoint delegate instead
+            if (self.debugger) |d| {
+                d.checkWriteBreakpoints(address, data, self) catch {
+                    logger.warn("Unmapped write to address 0x{X:0>4} with value 0x{X:0>2}\n", .{address, data});
+                };
+                return;
+            }
             self.bus.cpuWrite(address, data) catch {
                 logger.warn("Unmapped write to address 0x{X:0>4} with value 0x{X:0>2}\n", .{address, data});
             };
@@ -1301,5 +1319,8 @@ test "Full Instruction Rom (nestest.nes)" {
         // End execution before illegal instructions start
         if (cycles_executed >= 14575) break;
     }
-    try std.testing.expectEqualSlices(u8, ref_log, buffer.items);
+
+    // Uncomment next line to print output
+    // std.debug.print("{s}", .{buffer.items});
+    try std.testing.expectEqualStrings(ref_log, buffer.items);
 }

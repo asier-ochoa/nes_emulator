@@ -12,6 +12,11 @@ pub const std_options = std.Options {
 };
 
 pub fn main() !void {
+    // Initialize application allocator
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
     // Initialize CPU
     var bus = util.NesBus.init();
     var cpu = CPU.CPU(@TypeOf(bus)).init(&bus);
@@ -27,6 +32,9 @@ pub fn main() !void {
     defer rl.closeWindow();
     rl.setTargetFPS(rl.getMonitorRefreshRate(0));
 
+    // Initialize debugger but don't attach
+    var debugger = debug.Debugger.init(alloc);
+
     while (!rl.windowShouldClose()) {
         {  // Frame drawing scope
             rl.beginDrawing();
@@ -37,6 +45,7 @@ pub fn main() !void {
 
             {  // Ui Drawing scope
                 gui.menuBar(&state);
+                gui.debugger(&state, .{.x = 500, .y = 150}, &debugger);
                 gui.cpuStatus(&state, .{.x = 100, .y = 200}, @TypeOf(cpu), &cpu, 0, 0);
             }
         }
@@ -93,7 +102,7 @@ pub fn oldMain() !void {
             if (op) |o| std.debug.print("{X:0>2} ", .{o}) else std.debug.print("   ", .{});
         }
         std.debug.print(" {any: <32}", .{dis});
-        std.debug.print("{any} CYC:{}\n", .{cpu, cycles_executed});
+        std.debug.print("{any} CYC:{}\n", .{cpu, cycles_executed - 1});
     }
     while (true) : (cycles_executed += 1) {
         try cpu.tick();
