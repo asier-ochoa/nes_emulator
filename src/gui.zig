@@ -5,9 +5,71 @@ const debug = @import("debugger.zig");
 
 const input_buf_size = 128 + 1;
 
+// Width and height of windows
+// Order of fields determines order of dragging collision check. MAKE SURE ITS IN SYNC WITH DRAWING CODE
+pub const window_bounds = struct {
+    pub const cpu_status: rl.Vector2 = .{.y = 128, .x = 376};
+    pub const debugger: rl.Vector2 = .{.x = 320, .y = 312};
+};
+
+// TODO: Don't allow windows to be dragged off the edge
+// For a window to be draggable, it must:
+//   - Have decl in window_bounds that is a Vector2 that represents size of window and corresponds to a tag of same name in MenuBarItem
+//   - Have a _window_pos struct that is Vector2 in GuiState
+//   - Have a _window_active boolean in GuiState
+pub fn windowDraggingLogic(state: *GuiState) void {
+    // Lock gui when pressing dragging chrod key
+    if (rl.isKeyPressed(.key_left_shift)) {
+        rg.guiLock();
+    }
+    if (rl.isKeyReleased(.key_left_shift)) {
+        rg.guiUnlock();
+    }
+    // Check to start dragging
+    if (rl.isKeyDown(.key_left_shift) and rl.isMouseButtonPressed(.mouse_button_left)) {
+        std.debug.print("I HAVE STARTED GRABBING\n", .{});
+        inline for (@typeInfo(window_bounds).Struct.decls) |w| {  // Check collision with each window
+            const is_window_active = @field(state, w.name ++ "_window_active");
+            const window_anchor = @field(state, w.name ++ "_window_pos");
+            const window_size = @field(window_bounds, w.name);
+            const window_bounds_inner: rl.Rectangle = .{
+                .x = window_anchor.x, .y = window_anchor.y,
+                .width = window_size.x, .height = window_size.y
+            };
+            if (is_window_active and rl.checkCollisionPointRec(rl.getMousePosition(), window_bounds_inner)) {
+                state.currently_dragged_window = @field(MenuBarItem, w.name);
+                state.currently_dragged_mouse_offset = rl.getMousePosition().subtract(window_anchor);
+                std.debug.print("I have grabbed window: {any}\n", .{state.currently_dragged_window});
+                break;
+            }
+        }
+    }
+    // Stop dragging
+    if ((rl.isKeyReleased(.key_left_shift) or rl.isMouseButtonReleased(.mouse_button_left)) and state.currently_dragged_window != null) {
+        state.currently_dragged_window = null;
+        std.debug.print("--I have stopped dragging window\n", .{});
+    }
+    // Dragging movement
+    if (state.currently_dragged_window) |w| {
+        switch (w) {
+            .none, .file, .memory => {},
+            inline else => |t| {
+                const window_name = @tagName(t);
+                const window_pos = &@field(state, window_name ++ "_window_pos");
+                window_pos.* = rl.getMousePosition().subtract(state.currently_dragged_mouse_offset);
+            }
+        }
+    }
+}
+
 pub const GuiState = struct {
-    cpu_status_cpu_running: bool = false,  // If the cpu is currently paused or not to allow for value editing
+    // If it's null no window is being dragged
+    currently_dragged_window: ?MenuBarItem = null,
+    currently_dragged_mouse_offset: rl.Vector2 = .{.x = 0, .y = 0},  // Offset from anchor point to window anchor
+
+    cpu_status_window_pos: rl.Vector2 = .{.x = 100, .y = 100},
     cpu_status_window_active: bool = false,
+    cpu_status_cpu_running: bool = false,  // If the cpu is currently paused or not to allow for value editing
     cpu_status_a_register_text: [input_buf_size]u8 = .{0} ** input_buf_size,
     cpu_status_a_register_text_edit: bool = false,
     cpu_status_x_register_text: [input_buf_size]u8 = .{0} ** input_buf_size,
@@ -29,17 +91,18 @@ pub const GuiState = struct {
     cpu_status_z_flag: bool = false,
     cpu_status_c_flag: bool = false,
 
+    debugger_window_pos: rl.Vector2 = .{.x = 300, .y = 400},
     debugger_window_active: bool = false,
     debugger_dissasembly_scroll_offset: rl.Vector2 = .{.x = 0, .y = 0},
     debugger_dissasembly_bounds_offset: rl.Vector2 = .{.x = 0, .y = 0},
     debugger_dissasembly_scroll_view: rl.Rectangle = .{.x = 0, .y = 0, .width = 0, .height = 0},
 };
 
-const MenuBarItem = enum {
+pub const MenuBarItem = enum {
     none,
     file,
     debugger,
-    cpu_state,
+    cpu_status,
     memory
 };
 
@@ -61,7 +124,7 @@ pub fn menuBar(state: *GuiState) void {
     if (rg.guiButton(.{
         .x = 200, .y = 8,
         .width = 88, .height = 48
-    }, if (state.cpu_status_window_active) "> CPU STATE" else "CPU STATE") > 0)
+    }, if (state.cpu_status_window_active) "> CPU STATUS" else "CPU STATUS") > 0)
         state.cpu_status_window_active = !state.cpu_status_window_active;
     _ = rg.guiButton(.{
         .x = 296, .y = 8,
@@ -77,7 +140,7 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
         // TODO: detatch debugger when closing window
         if (rg.guiWindowBox(.{
             .x = anchor.x, .y = anchor.y,
-            .width = 320, .height = 312
+            .width = window_bounds.debugger.x, .height = window_bounds.debugger.y
         }, "Debugger") > 0) state.debugger_window_active = false;
 
         // Resume code execution button
@@ -228,7 +291,7 @@ pub fn cpuStatus(state: *GuiState, pos: rl.Vector2, CPU: type, cpu: *const CPU, 
         // Main window
         if (rg.guiWindowBox(.{
             .x = anchor.x, .y = anchor.y,
-            .height = 128, .width = 376
+            .height = window_bounds.cpu_status.y, .width = window_bounds.cpu_status.x
         }, "CPU Status") > 0) state.cpu_status_window_active = false;
 
         // A register

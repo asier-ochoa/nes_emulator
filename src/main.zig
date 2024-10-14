@@ -36,6 +36,8 @@ pub fn main() !void {
     var debugger = debug.Debugger.init(alloc);
 
     while (!rl.windowShouldClose()) {
+        gui.windowDraggingLogic(&state);
+
         {  // Frame drawing scope
             rl.beginDrawing();
             defer rl.endDrawing();
@@ -45,8 +47,8 @@ pub fn main() !void {
 
             {  // Ui Drawing scope
                 gui.menuBar(&state);
-                gui.debugger(&state, .{.x = 500, .y = 150}, &debugger);
-                gui.cpuStatus(&state, .{.x = 100, .y = 200}, @TypeOf(cpu), &cpu, 0, 0);
+                gui.debugger(&state, state.debugger_window_pos, &debugger);
+                gui.cpuStatus(&state, state.cpu_status_window_pos, @TypeOf(cpu), &cpu, 0, 0);
             }
         }
     }
