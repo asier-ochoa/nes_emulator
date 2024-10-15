@@ -27,7 +27,6 @@ pub fn windowDraggingLogic(state: *GuiState) void {
     }
     // Check to start dragging
     if (rl.isKeyDown(.key_left_shift) and rl.isMouseButtonPressed(.mouse_button_left)) {
-        std.debug.print("I HAVE STARTED GRABBING\n", .{});
         inline for (@typeInfo(window_bounds).Struct.decls) |w| {  // Check collision with each window
             const is_window_active = @field(state, w.name ++ "_window_active");
             const window_anchor = @field(state, w.name ++ "_window_pos");
@@ -39,7 +38,6 @@ pub fn windowDraggingLogic(state: *GuiState) void {
             if (is_window_active and rl.checkCollisionPointRec(rl.getMousePosition(), window_bounds_inner)) {
                 state.currently_dragged_window = @field(MenuBarItem, w.name);
                 state.currently_dragged_mouse_offset = rl.getMousePosition().subtract(window_anchor);
-                std.debug.print("I have grabbed window: {any}\n", .{state.currently_dragged_window});
                 break;
             }
         }
@@ -47,7 +45,6 @@ pub fn windowDraggingLogic(state: *GuiState) void {
     // Stop dragging
     if ((rl.isKeyReleased(.key_left_shift) or rl.isMouseButtonReleased(.mouse_button_left)) and state.currently_dragged_window != null) {
         state.currently_dragged_window = null;
-        std.debug.print("--I have stopped dragging window\n", .{});
     }
     // Dragging movement
     if (state.currently_dragged_window) |w| {
@@ -132,7 +129,7 @@ pub fn menuBar(state: *GuiState) void {
     }, "MEMORY");
 }
 
-pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugger) void {
+pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugger, cpu: anytype, cycles: *usize) void {
     const anchor = pos;
     if (state.debugger_window_active) {
         // TODO: verify cpu has debugger attached, if not, then attach
@@ -167,11 +164,16 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
             .width = 72, .height = 24
         }, "STEP INSTR");
 
-        // Step forwar 1 cycle
-        _ = rg.guiButton(.{
+        // TODO: Replace with call to proper system ticker function
+        // Step forward 1 cycle
+        if (rg.guiButton(.{
             .x = anchor.x + 8, .y = anchor.y + 104,
             .width = 72, .height = 24
-        }, "STEP CYCLE");
+        }, "STEP CYCLE") > 0) {
+            if (cpu.tick()) |_| {
+                cycles.* += 1;
+            } else |_| {}
+        }
 
         // TODO: Draw some colored text below to indicate the execution status
 

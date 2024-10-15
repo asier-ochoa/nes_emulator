@@ -22,7 +22,6 @@ pub fn main() !void {
     var cpu = CPU.CPU(@TypeOf(bus)).init(&bus);
     cpu.program_counter = 0xC000;
     cpu.stack_pointer = 0xFD;
-    cpu.a_register = 0xAC;
 
     // Initialize GUI state
     var state: gui.GuiState = .{};
@@ -35,20 +34,32 @@ pub fn main() !void {
     // Initialize debugger but don't attach
     var debugger = debug.Debugger.init(alloc);
 
+    // TODO: Replace with proper rom loading method controlled by gui
+    // Load nestest
+    const file = try std.fs.cwd().openFile("src/resources/nestest.nes", .{});
+    defer file.close();
+    const file_data = try alloc.alloc(u8, (try file.metadata()).size());
+    _ = try file.readAll(file_data);
+    rom_loader.load_ines_into_bus(file_data, &bus);
+
+    // TODO: Move this into it's own application state struct
+    var cycles_executed: usize = 0;
+    // var instr_executed = 0;
+
     while (!rl.windowShouldClose()) {
         gui.windowDraggingLogic(&state);
 
         {  // Frame drawing scope
             rl.beginDrawing();
+            rl.clearBackground(rl.Color.dark_blue);
             defer rl.endDrawing();
-            defer rl.clearBackground(rl.Color.dark_blue);
 
             rl.drawFPS(0, 0);
 
             {  // Ui Drawing scope
                 gui.menuBar(&state);
-                gui.debugger(&state, state.debugger_window_pos, &debugger);
-                gui.cpuStatus(&state, state.cpu_status_window_pos, @TypeOf(cpu), &cpu, 0, 0);
+                gui.debugger(&state, state.debugger_window_pos, &debugger, &cpu, &cycles_executed);
+                gui.cpuStatus(&state, state.cpu_status_window_pos, @TypeOf(cpu), &cpu, cycles_executed, 0);
             }
         }
     }
