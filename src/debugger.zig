@@ -119,14 +119,14 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
         const pc: u16 = switch (inner_opt) {
             .current_instruction => if (opt_kind == .current_instruction) cpu.program_counter else unreachable,
             .single_instruction => |o| o.address,
-            .slice => @intCast(mem_idx & 0xFFFF),  // Todo: Change to have pc base at start of memory
-            .from_to => unreachable // TODO
+            .slice => @intCast(mem_idx & 0xFFFF),
+            .from_to => @intCast(mem_idx & 0xFFFF)
         };
         const op_c = switch (inner_opt) {
             .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusReadConst(pc) else unreachable,
             .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusReadConst(o.address) else unreachable,
             .slice => |o| o.memory[mem_idx],
-            .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(mem_idx) else unreachable
+            .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(@intCast(mem_idx & 0xFFFF)) else unreachable
         };
         mem_idx += 1;
 
@@ -140,7 +140,7 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
                     .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusReadConst(pc +% 1) else unreachable,
                     .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusReadConst(o.address +% 1) else unreachable,
                     .slice => |o| o.memory[mem_idx],
-                    .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(mem_idx) else unreachable
+                    .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(@intCast(mem_idx & 0xFFFF)) else unreachable
                 };
             } else null,
             if (meta.len > 2) blk: {
@@ -149,7 +149,7 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
                     .current_instruction => if (opt_kind == .current_instruction) cpu.safeBusReadConst(pc +% 2) else unreachable,
                     .single_instruction => |o| if (opt_kind == .single_instruction) cpu.safeBusReadConst(o.address +% 2) else unreachable,
                     .slice => |o| o.memory[mem_idx],
-                    .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(mem_idx) else unreachable
+                    .from_to => if (opt_kind == .from_to) cpu.safeBusReadConst(@intCast(mem_idx & 0xFFFF)) else unreachable
                 };
             } else null,
         };
@@ -207,6 +207,9 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
         }
         if (opt_kind == .slice and mem_idx >= inner_opt.slice.memory.len) {
             return try buf.toOwnedSlice(inner_opt.slice.alloc);
+        }
+        if (opt_kind == .from_to and mem_idx >= inner_opt.from_to.end) {
+            return try buf.toOwnedSlice(inner_opt.from_to.alloc);
         }
     }
 }
@@ -296,12 +299,21 @@ const InstructionDissasembly = struct {
     }
 };
 
-test "Slice Dissasembly" {
-    const test_obj_code = [_]u8{0xAD, 0x16, 0x40, 0x20, 0x00, 0x43, 0xA0, 0x20, 0x91, 0x69, 0xAA, 0x1D, 0xA1, 0x1A};
+const test_obj_code = [_]u8{0xAD, 0x16, 0x40, 0x20, 0x00, 0x43, 0xA0, 0x20, 0x91, 0x69, 0xAA, 0x1D, 0xA1, 0x1A};
+const test_formatted_dissasembly = \\LDA $4016
+                                   \\JSR $4300
+                                   \\LDY #$20
+                                   \\STA ($69),Y
+                                   \\TAX
+                                   \\ORA $1AA1,X
+                                   \\
+                                   ;
 
+test "Slice Dissasembly" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
     const alloc = arena.allocator();
-    
+
     var buf = std.ArrayList(u8).init(alloc);
     const buf_writer = buf.writer();
 
@@ -311,14 +323,32 @@ test "Slice Dissasembly" {
         try buf_writer.print("{any}\n", .{d});
     }
 
-    try std.testing.expectEqualStrings(
-        \\LDA $4016
-        \\JSR $4300
-        \\LDY #$20
-        \\STA ($69),Y
-        \\TAX
-        \\ORA $1AA1,X
-        \\
-        , buf.items
+    try std.testing.expectEqualStrings(test_formatted_dissasembly, buf.items);
+}
+
+test "FromTo Dissasemby" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var buf = std.ArrayList(u8).init(alloc);
+    const buf_writer = buf.writer();
+
+    var test_bus = bus.Bus(struct {
+        @"0000-FFFF": [0xFFFF]u8
+    }).init();
+    std.mem.copyForwards(u8, test_bus.memory_map.@"0000-FFFF"[0x8000..], &test_obj_code);
+    const test_cpu = proc.CPU(@TypeOf(test_bus)).init(&test_bus);
+
+    const dis = try dissasemble(
+        test_cpu,
+        .from_to,
+        .{.start = 0x8000, .end = 0x8000 + test_obj_code.len, .alloc = alloc}
     );
+
+    for (dis) |d| {
+        try buf_writer.print("{any}\n", .{d});
+    }
+
+    try std.testing.expectEqualStrings(test_formatted_dissasembly, buf.items);
 }

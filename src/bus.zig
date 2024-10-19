@@ -117,7 +117,13 @@ pub fn Bus(SuppliedMMap: type) type {
                         ),
                         // Check array is properly sized
                         .Array => |mem_array| {
-                            if (bounds.upper - bounds.lower + 1 != mem_array.len) @compileError(
+                            // When an array occupies the entire address space, the bounds check overflows
+                            if (bounds.upper - bounds.lower == 0xFFFF) {
+                                if (mem_array.len != 0xFFFF) @compileError(
+                                    "Memory region \"" ++ field.name ++ "\"'s size doesn't correspond to type's size, " ++
+                                        "correct size is " ++ std.fmt.comptimePrint("0x{X:0>4}", .{bounds.upper - bounds.lower})
+                                );
+                            } else if (bounds.upper - bounds.lower + 1 != mem_array.len) @compileError(
                             "Memory region \"" ++ field.name ++ "\"'s size doesn't correspond to type's size, " ++
                                 "correct size is " ++ std.fmt.comptimePrint("0x{X:0>4}", .{bounds.upper - bounds.lower + 1})
                             );
