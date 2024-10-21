@@ -19,14 +19,14 @@ pub const window_bounds = struct {
 //   - Have a _window_active boolean in GuiState
 pub fn windowDraggingLogic(state: *GuiState) void {
     // Lock gui when pressing dragging chrod key
-    if (rl.isKeyPressed(.key_left_shift)) {
+    if (rl.isKeyPressed(.key_left_control)) {
         rg.guiLock();
     }
-    if (rl.isKeyReleased(.key_left_shift)) {
+    if (rl.isKeyReleased(.key_left_control)) {
         rg.guiUnlock();
     }
     // Check to start dragging
-    if (rl.isKeyDown(.key_left_shift) and rl.isMouseButtonPressed(.mouse_button_left)) {
+    if (rl.isKeyDown(.key_left_control) and rl.isMouseButtonPressed(.mouse_button_left)) {
         inline for (@typeInfo(window_bounds).Struct.decls) |w| {  // Check collision with each window
             const is_window_active = @field(state, w.name ++ "_window_active");
             const window_anchor = @field(state, w.name ++ "_window_pos");
@@ -43,7 +43,7 @@ pub fn windowDraggingLogic(state: *GuiState) void {
         }
     }
     // Stop dragging
-    if ((rl.isKeyReleased(.key_left_shift) or rl.isMouseButtonReleased(.mouse_button_left)) and state.currently_dragged_window != null) {
+    if ((rl.isKeyReleased(.key_left_control) or rl.isMouseButtonReleased(.mouse_button_left)) and state.currently_dragged_window != null) {
         state.currently_dragged_window = null;
     }
     // Dragging movement
@@ -90,9 +90,15 @@ pub const GuiState = struct {
 
     debugger_window_pos: rl.Vector2 = .{.x = 300, .y = 400},
     debugger_window_active: bool = false,
+    debugger_dissasembly: ?[]debug.InstructionDissasembly = null,  // Only null once at the start of the program
+    debugger_dissasembly_regen: bool = false,  // Flag to signal that the debugger dissasembly must be regenerated (free and assign to new result)
+    debugger_dissasembly_address: u16 = 0,
+    debugger_dissasembly_address_text: [input_buf_size]u8 = .{0} ** input_buf_size,
+    debugger_dissasembly_address_text_edit: bool = false,
+    debugger_dissasembly_scroll_region_height: f32 = 0,
     debugger_dissasembly_scroll_offset: rl.Vector2 = .{.x = 0, .y = 0},
-    debugger_dissasembly_bounds_offset: rl.Vector2 = .{.x = 0, .y = 0},
     debugger_dissasembly_scroll_view: rl.Rectangle = .{.x = 0, .y = 0, .width = 0, .height = 0},
+    debugger_dissasembly_text_buffer: std.ArrayList(u8)
 };
 
 pub const MenuBarItem = enum {
@@ -116,8 +122,10 @@ pub fn menuBar(state: *GuiState) void {
     if (rg.guiButton(.{
         .x = 104, .y = 8,
         .width = 88, .height = 48
-    }, if (state.debugger_window_active) "> DEBUGGER" else "DEBUGGER") > 0)
+    }, if (state.debugger_window_active) "> DEBUGGER" else "DEBUGGER") > 0) {
         state.debugger_window_active = !state.debugger_window_active;
+        state.debugger_dissasembly_regen = true;
+    }
     if (rg.guiButton(.{
         .x = 200, .y = 8,
         .width = 88, .height = 48
@@ -129,7 +137,8 @@ pub fn menuBar(state: *GuiState) void {
     }, "MEMORY");
 }
 
-pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugger, cpu: anytype, cycles: *usize) void {
+const dissasembly_line_height = 18;
+pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugger, cpu: anytype, cycles: *usize, alloc: std.mem.Allocator) void {
     const anchor = pos;
     if (state.debugger_window_active) {
         // TODO: verify cpu has debugger attached, if not, then attach
@@ -177,15 +186,89 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
 
         // TODO: Draw some colored text below to indicate the execution status
 
+        // Dissasembly start address
+        if (rg.guiTextBox(.{
+            .x = anchor.x + 8, .y = anchor.y + 248,
+            .width = 72, .height = 24
+        }, @ptrCast(&state.debugger_dissasembly_address_text), 128,state.debugger_dissasembly_address_text_edit) > 0) {
+            state.debugger_dissasembly_address_text_edit = !state.debugger_dissasembly_address_text_edit;
+            const text = &state.debugger_dissasembly_address_text;
+
+            // Parse literal and set address
+            if (std.fmt.parseInt(u16, text[0..4], 16)) |val| state.debugger_dissasembly_address = val else |_| {}
+            @memset(text, 0);
+            _ = std.fmt.bufPrint(text, "{X:0>4}", .{state.debugger_dissasembly_address}) catch unreachable;
+        }
+
+        // Dissasembly button
+        _ = rg.guiButton(.{
+            .x = anchor.x + 8, .y = anchor.y + 280,
+            .width = 72, .height = 24
+        }, "GOTO");
+
         // Dissasembly view
         _ = rg.guiScrollPanel(.{
             .x = anchor.x + 88, .y = anchor.y + 32,
-            .width = 200 - state.debugger_dissasembly_bounds_offset.x,
-            .height = 272 - state.debugger_dissasembly_bounds_offset.y
+            .width = 224,
+            .height = 272
         }, null, .{
             .x = anchor.x + 88, .y = anchor.y + 32,
-            .width = 200, .height = 272
+            .width = 224, .height = state.debugger_dissasembly_scroll_region_height
         }, &state.debugger_dissasembly_scroll_offset, &state.debugger_dissasembly_scroll_view);
+        {
+            // TODO: shrink scissor region by horizontal scroll bar height
+            // rl.beginScissorMode(@intFromFloat(anchor.x + 88), @intFromFloat(anchor.y + 32), 200, 272);
+            rl.beginScissorMode(
+                @intFromFloat(state.debugger_dissasembly_scroll_view.x),
+                @intFromFloat(state.debugger_dissasembly_scroll_view.y),
+                @intFromFloat(state.debugger_dissasembly_scroll_view.width),
+                @intFromFloat(state.debugger_dissasembly_scroll_view.height)
+            );
+            defer rl.endScissorMode();
+
+            // Regenerate dissasembly
+            if (state.debugger_dissasembly_regen) {
+                state.debugger_dissasembly_regen = false;
+                if (state.debugger_dissasembly) |d| alloc.free(d);
+
+                // Read reset vector to signify where to start dissasembly
+                const reset_vector: u16 = @as(u16, cpu.safeBusReadConst(0xFFFD)) << 8 | cpu.safeBusReadConst(0xFFFC);
+                state.debugger_dissasembly = debug.dissasemble(cpu, .from_to, .{.start = reset_vector, .end = 0xFFFF, .alloc = alloc}) catch unreachable;
+
+                // Count pixels needed to show all lines + top and bottom margins
+                state.debugger_dissasembly_scroll_region_height = @floatFromInt(dissasembly_line_height * state.debugger_dissasembly.?.len + 8 + 8);
+            }
+
+            dissasemblyWindow(.{.x = anchor.x + 88, .y = anchor.y + 32}, state.debugger_dissasembly_scroll_offset.y, state.debugger_dissasembly.?);
+        }
+    }
+}
+
+fn dissasemblyWindow(pos: rl.Vector2, scroll: f32, dissasembly: []const debug.InstructionDissasembly) void {
+    const anchor = pos;
+    var buf: [32]u8 = .{0} ** 32;
+
+    for (dissasembly, 0..) |d, i| {
+        const y_pos = @as(f32, @floatFromInt(8 + i * dissasembly_line_height)) + scroll;
+        var x_pos: f32 = 8;
+        @memset(&buf, 0);
+        _ = std.fmt.bufPrint(&buf, "{X:0>4}", .{d.pc}) catch unreachable;
+        drawText(anchor.add(.{.x = x_pos, .y = y_pos}), @ptrCast(&buf));
+        x_pos += 32 + 10;
+
+        for (d.op_codes) |op| {
+            if (op) |o| {
+                @memset(&buf, 0);
+                _ = std.fmt.bufPrint(&buf, "{X:0>2}", .{o}) catch unreachable;
+                drawText(anchor.add(.{.x = x_pos, .y = y_pos}), @ptrCast(&buf));
+            }
+            x_pos += 16 + 5;
+        }
+        x_pos += 5;
+
+        @memset(&buf, 0);
+        _ = std.fmt.bufPrint(&buf, "{any}", .{d}) catch unreachable;
+        drawText(anchor.add(.{.x = x_pos, .y = y_pos}), @ptrCast(&buf));
     }
 }
 
@@ -354,5 +437,16 @@ pub fn cpuStatus(state: *GuiState, pos: rl.Vector2, CPU: type, cpu: *const CPU, 
 
         statusFlags(state, .{.x = anchor.x + 200, .y = anchor.y + 64}, CPU, cpu);
     }
+}
 
+fn drawText(pos: rl.Vector2, text: [*:0]const u8) void {
+    const color: u32 = @bitCast(rg.guiGetStyle(.default, @intFromEnum(rg.GuiControlProperty.text_color_normal)));
+    const font_size = rg.guiGetStyle(.default, @intFromEnum(rg.GuiDefaultProperty.text_size));
+    const font_spacing = rg.guiGetStyle(.default, @intFromEnum(rg.GuiDefaultProperty.text_spacing));
+    rl.drawTextEx(
+        rg.guiGetFont(),
+        text,
+        pos, @floatFromInt(font_size),
+        @floatFromInt(font_spacing), rl.getColor(color)
+    );
 }

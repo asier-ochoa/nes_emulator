@@ -5,6 +5,7 @@ const util = @import("util.zig");
 const rom_loader = @import("rom_loader.zig");
 const debug = @import("debugger.zig");
 const rl = @import("raylib");
+const rg = @import("raygui");
 const gui = @import("gui.zig");
 
 pub const std_options = std.Options {
@@ -24,19 +25,22 @@ pub fn main() !void {
     cpu.stack_pointer = 0xFD;
 
     // Initialize GUI state
-    var state: gui.GuiState = .{};
+    var state: gui.GuiState = .{
+        .debugger_dissasembly_text_buffer = std.ArrayList(u8).init(alloc)
+    };
 
     // Initialize window
     rl.initWindow(1280, 720, "NES Emulator");
     defer rl.closeWindow();
     rl.setTargetFPS(rl.getMonitorRefreshRate(0));
+    rg.guiLoadStyle("./dark.rgs");
 
     // Initialize debugger but don't attach
     var debugger = debug.Debugger.init(alloc);
 
     // TODO: Replace with proper rom loading method controlled by gui
     // Load nestest
-    const file = try std.fs.cwd().openFile("src/resources/nestest.nes", .{});
+    const file = try std.fs.cwd().openFile("./../src/resources/nestest.nes", .{});
     defer file.close();
     const file_data = try alloc.alloc(u8, (try file.metadata()).size());
     _ = try file.readAll(file_data);
@@ -58,7 +62,7 @@ pub fn main() !void {
 
             {  // Ui Drawing scope
                 gui.menuBar(&state);
-                gui.debugger(&state, state.debugger_window_pos, &debugger, &cpu, &cycles_executed);
+                gui.debugger(&state, state.debugger_window_pos, &debugger, &cpu, &cycles_executed, alloc);
                 gui.cpuStatus(&state, state.cpu_status_window_pos, @TypeOf(cpu), &cpu, cycles_executed, 0);
             }
         }

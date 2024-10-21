@@ -114,6 +114,11 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
     };
 
     var buf = std.ArrayListUnmanaged(InstructionDissasembly){};
+    errdefer switch (inner_opt) {
+        .from_to => |o| buf.deinit(o.alloc),
+        .slice => |o| buf.deinit(o.alloc),
+        else => {}
+    };
 
     while (true) {
         const pc: u16 = switch (inner_opt) {
@@ -131,7 +136,10 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
         mem_idx += 1;
 
         errdefer std.debug.print("Error: Invalid op: 0x{X:0>2}\n", .{op_c});
-        const meta = proc.instr.getMetadata(op_c) orelse return DissasemblyError.invalid_opcode;
+        const meta = switch (opt_kind) {
+            .current_instruction, .single_instruction => proc.instr.getMetadata(op_c) orelse return DissasemblyError.invalid_opcode,
+            .slice, .from_to => proc.instr.getMetadata(op_c) orelse return buf.toOwnedSlice(opt.alloc)
+        };
         const operands = [_]?u8{
             op_c,
             if (meta.len > 1) blk: {
@@ -214,7 +222,7 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
     }
 }
 
-const InstructionDissasembly = struct {
+pub const InstructionDissasembly = struct {
     pc: u16,
     len: u2,
     pneumonic: []const u8,
@@ -300,12 +308,18 @@ const InstructionDissasembly = struct {
 };
 
 const test_obj_code = [_]u8{0xAD, 0x16, 0x40, 0x20, 0x00, 0x43, 0xA0, 0x20, 0x91, 0x69, 0xAA, 0x1D, 0xA1, 0x1A};
+const test_obj_code_malformed = [_]u8{0xAD, 0x16, 0x40, 0x20, 0x00, 0x43, 0xA0, 0x20, 0xFF, 0x69, 0xAA, 0x1D, 0xA1, 0x1A};
 const test_formatted_dissasembly = \\LDA $4016
                                    \\JSR $4300
                                    \\LDY #$20
                                    \\STA ($69),Y
                                    \\TAX
                                    \\ORA $1AA1,X
+                                   \\
+                                   ;
+const test_formatted_dissasembly_malformed = \\LDA $4016
+                                   \\JSR $4300
+                                   \\LDY #$20
                                    \\
                                    ;
 
@@ -324,6 +338,16 @@ test "Slice Dissasembly" {
     }
 
     try std.testing.expectEqualStrings(test_formatted_dissasembly, buf.items);
+
+    // Testing with error
+    buf.clearAndFree();
+    const err_dis = try dissasemble(.{}, .slice, .{.memory = &test_obj_code_malformed, .alloc = alloc});
+
+    for (err_dis) |d| {
+        try buf_writer.print("{any}\n", .{d});
+    }
+
+    try std.testing.expectEqualStrings(test_formatted_dissasembly_malformed, buf.items);
 }
 
 test "FromTo Dissasemby" {
@@ -351,4 +375,19 @@ test "FromTo Dissasemby" {
     }
 
     try std.testing.expectEqualStrings(test_formatted_dissasembly, buf.items);
+
+    // Testing with error
+    buf.clearAndFree();
+    std.mem.copyForwards(u8, test_bus.memory_map.@"0000-FFFF"[0x8000..], &test_obj_code_malformed);
+    const err_dis = try dissasemble(
+        test_cpu,
+        .from_to,
+        .{.start = 0x8000, .end = 0x8000 + test_obj_code_malformed.len, .alloc = alloc}
+    );
+
+    for (err_dis) |d| {
+        try buf_writer.print("{any}\n", .{d});
+    }
+
+    try std.testing.expectEqualStrings(test_formatted_dissasembly_malformed, buf.items);
 }

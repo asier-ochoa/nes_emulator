@@ -7,8 +7,15 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = b.host
     });
-    b.installArtifact(emulator_exe);
+    const install_exe = b.addInstallArtifact(emulator_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "./" } }
+    });
+    b.getInstallStep().dependOn(&install_exe.step);
 
+    // Gui style artifact
+    const style_file = b.addInstallFile(b.path("src/resources/dark.rgs"), "./dark.rgs");
+    emulator_exe.step.dependOn(&style_file.step);
+    
     // Declare raylib
     const raylib_dep = b.dependency("raylib", .{
         .target = b.host,
@@ -25,6 +32,8 @@ pub fn build(b: *std.Build) void {
 
     // Build script steps
     const run_artifact = b.addRunArtifact(emulator_exe);
+    run_artifact.cwd = b.path("./zig-out/");
+    run_artifact.step.dependOn(b.getInstallStep());
     const run_step = b.step("run", "Run emulator");
     run_step.dependOn(&run_artifact.step);
 }
