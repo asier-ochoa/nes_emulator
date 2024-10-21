@@ -86,13 +86,23 @@ const DissassemblyOptionsTag = enum {
     from_to
 };
 
+const OnInvalidOp = enum {
+    // Exits dissasembly and returns as is
+    abort,
+    // Ignores and continues by filling the dissasembly with garbage
+    ignore,
+    // Exits with error
+    fail
+};
+
 const DissassemblyOptions = union(DissassemblyOptionsTag) {
     current_instruction: struct {record_state: bool = true},
     single_instruction: struct {address: u16},
-    slice: struct {memory: []const u8, alloc: std.mem.Allocator},
+    slice: struct {memory: []const u8, on_fail: OnInvalidOp = .abort, alloc: std.mem.Allocator},
     from_to: struct {
         start: u16,
         end: u16,
+        on_fail: OnInvalidOp = .abort,
         alloc: std.mem.Allocator
     }
 };
@@ -138,7 +148,11 @@ pub fn dissasemble(cpu: anytype, comptime opt_kind: DissassemblyOptionsTag, opt:
         errdefer std.debug.print("Error: Invalid op: 0x{X:0>2}\n", .{op_c});
         const meta = switch (opt_kind) {
             .current_instruction, .single_instruction => proc.instr.getMetadata(op_c) orelse return DissasemblyError.invalid_opcode,
-            .slice, .from_to => proc.instr.getMetadata(op_c) orelse return buf.toOwnedSlice(opt.alloc)
+            inline .slice, .from_to => |k| switch (@field(inner_opt, @tagName(k)).on_fail) {
+                .abort => proc.instr.getMetadata(op_c) orelse return buf.toOwnedSlice(opt.alloc),
+                .fail => proc.instr.getMetadata(op_c) orelse return DissasemblyError.invalid_opcode,
+                .ignore => proc.instr.getMetadata(op_c) orelse proc.instr.getInvalidMetadata(op_c),
+            }
         };
         const operands = [_]?u8{
             op_c,

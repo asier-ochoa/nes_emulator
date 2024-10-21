@@ -9,7 +9,7 @@ const input_buf_size = 128 + 1;
 // Order of fields determines order of dragging collision check. MAKE SURE ITS IN SYNC WITH DRAWING CODE
 pub const window_bounds = struct {
     pub const cpu_status: rl.Vector2 = .{.y = 128, .x = 376};
-    pub const debugger: rl.Vector2 = .{.x = 320, .y = 312};
+    pub const debugger: rl.Vector2 = .{.x = 320, .y = 504};
 };
 
 // TODO: Don't allow windows to be dragged off the edge
@@ -188,7 +188,7 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
 
         // Dissasembly start address
         if (rg.guiTextBox(.{
-            .x = anchor.x + 8, .y = anchor.y + 248,
+            .x = anchor.x + 8, .y = anchor.y + 440,
             .width = 72, .height = 24
         }, @ptrCast(&state.debugger_dissasembly_address_text), 128,state.debugger_dissasembly_address_text_edit) > 0) {
             state.debugger_dissasembly_address_text_edit = !state.debugger_dissasembly_address_text_edit;
@@ -202,7 +202,7 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
 
         // Dissasembly button
         _ = rg.guiButton(.{
-            .x = anchor.x + 8, .y = anchor.y + 280,
+            .x = anchor.x + 8, .y = anchor.y + 472,
             .width = 72, .height = 24
         }, "GOTO");
 
@@ -210,14 +210,12 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
         _ = rg.guiScrollPanel(.{
             .x = anchor.x + 88, .y = anchor.y + 32,
             .width = 224,
-            .height = 272
+            .height = 464
         }, null, .{
             .x = anchor.x + 88, .y = anchor.y + 32,
             .width = 224, .height = state.debugger_dissasembly_scroll_region_height
         }, &state.debugger_dissasembly_scroll_offset, &state.debugger_dissasembly_scroll_view);
         {
-            // TODO: shrink scissor region by horizontal scroll bar height
-            // rl.beginScissorMode(@intFromFloat(anchor.x + 88), @intFromFloat(anchor.y + 32), 200, 272);
             rl.beginScissorMode(
                 @intFromFloat(state.debugger_dissasembly_scroll_view.x),
                 @intFromFloat(state.debugger_dissasembly_scroll_view.y),
@@ -233,24 +231,46 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
 
                 // Read reset vector to signify where to start dissasembly
                 const reset_vector: u16 = @as(u16, cpu.safeBusReadConst(0xFFFD)) << 8 | cpu.safeBusReadConst(0xFFFC);
-                state.debugger_dissasembly = debug.dissasemble(cpu, .from_to, .{.start = reset_vector, .end = 0xFFFF, .alloc = alloc}) catch unreachable;
+                state.debugger_dissasembly = debug.dissasemble(cpu, .from_to, .{.start = reset_vector, .end = reset_vector + 0x0FFF, .alloc = alloc, .on_fail = .ignore}) catch unreachable;
 
                 // Count pixels needed to show all lines + top and bottom margins
                 state.debugger_dissasembly_scroll_region_height = @floatFromInt(dissasembly_line_height * state.debugger_dissasembly.?.len + 8 + 8);
             }
 
-            dissasemblyWindow(.{.x = anchor.x + 88, .y = anchor.y + 32}, state.debugger_dissasembly_scroll_offset.y, state.debugger_dissasembly.?);
+            dissasemblyWindow(
+                .{.x = anchor.x + 88, .y = anchor.y + 32},
+                state.debugger_dissasembly_scroll_offset.y,
+                state.debugger_dissasembly.?,
+                cpu.program_counter
+            );
         }
     }
 }
 
-fn dissasemblyWindow(pos: rl.Vector2, scroll: f32, dissasembly: []const debug.InstructionDissasembly) void {
+fn dissasemblyWindow(pos: rl.Vector2, scroll: f32, dissasembly: []const debug.InstructionDissasembly, address: u16) void {
     const anchor = pos;
     var buf: [32]u8 = .{0} ** 32;
 
-    for (dissasembly, 0..) |d, i| {
+    // Line from which to start rendering, with 1 line of overdraw
+    const start_dissasembly: usize = @divFloor(@abs(@as(i64, @intFromFloat(scroll))), dissasembly_line_height) -| 1;
+    const end_dissasembly: usize = if (start_dissasembly + 34 > dissasembly.len - 1) dissasembly.len - 1 else start_dissasembly + 34;
+
+    var pc_line_drawn = false;
+    for (dissasembly[start_dissasembly..end_dissasembly], start_dissasembly..) |d, i| {
         const y_pos = @as(f32, @floatFromInt(8 + i * dissasembly_line_height)) + scroll;
         var x_pos: f32 = 8;
+
+        // TODO: Do this check with op code alligned address
+        // Draw colored box to indicate current op_code address
+        if (d.pc >= address and d.pc < address + d.len and !pc_line_drawn) {
+            pc_line_drawn = true;
+            rl.drawRectangle(
+                @intFromFloat(anchor.x),@intFromFloat(anchor.y + y_pos),
+                700, dissasembly_line_height,
+                rl.Color.blue
+            );
+        }
+
         @memset(&buf, 0);
         _ = std.fmt.bufPrint(&buf, "{X:0>4}", .{d.pc}) catch unreachable;
         drawText(anchor.add(.{.x = x_pos, .y = y_pos}), @ptrCast(&buf));

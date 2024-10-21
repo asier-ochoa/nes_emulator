@@ -935,6 +935,19 @@ pub const instr = struct {
         // ind_branch: bool = false,  // Indicates up to 2 possible extra cycles on different page branch
     };
 
+    // Used for invalid op codes
+    pub fn getInvalidMetadata(op: u8) *const Metadata {
+        return switch (op) {
+            inline else => |o| &.{
+                .pneumonic = "???",
+                .op = o,
+                .addressing = .Unknown,
+                .cycles = 0,
+                .len = 1
+            }
+        };
+    }
+
     // Add memory to accumulator with carry
     pub const ADCimm: Metadata = .{.pneumonic = "ADC", .op = 0x69, .addressing = .Immediate, .cycles = 2, .len = 2};
     pub const ADCzpg: Metadata = .{.pneumonic = "ADC", .op = 0x65, .addressing = .ZeroPage, .cycles = 3, .len = 2};
@@ -1244,6 +1257,7 @@ pub const CPUError = error {
 };
 
 pub const AddressingMode = enum {
+    Unknown,
     Accumulator,  // No addressing
     Implied,  // No addressing
     Relative,
