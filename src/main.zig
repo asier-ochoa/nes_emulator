@@ -14,20 +14,21 @@ pub const std_options = std.Options {
 
 pub fn main() !void {
     // Initialize application allocator
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
 
-    // Initialize CPU
-    var bus = util.NesBus.init();
-    var cpu = CPU.CPU(@TypeOf(bus)).init(&bus);
-    cpu.program_counter = 0xC000;
-    cpu.stack_pointer = 0xFD;
+    // Initialize emulation system
+    var sys = try util.NesSystem.init(alloc);
+    defer sys.deinit();
+    sys.cpu.program_counter = 0xC000;
+    sys.cpu.stack_pointer = 0xFD;
 
     // Initialize GUI state
     var state: gui.GuiState = .{
         .debugger_dissasembly_text_buffer = std.ArrayList(u8).init(alloc)
     };
+    defer state.deinit(alloc);
 
     // Initialize window
     rl.initWindow(1280, 720, "NES Emulator");
@@ -36,21 +37,24 @@ pub fn main() !void {
     rg.guiLoadStyle("./dark.rgs");
 
     // Initialize debugger but don't attach
-    var debugger = debug.Debugger.init(alloc);
+    // var debugger = debug.Debugger.init(alloc);
 
     // TODO: Replace with proper rom loading method controlled by gui
     // Load nestest
     const file = try std.fs.cwd().openFile("./../src/resources/nestest.nes", .{});
     defer file.close();
     const file_data = try alloc.alloc(u8, (try file.metadata()).size());
+    defer _ = alloc.free(file_data);
     _ = try file.readAll(file_data);
-    rom_loader.load_ines_into_bus(file_data, &bus);
-
-    // TODO: Move this into it's own application state struct
-    var cycles_executed: usize = 0;
-    // var instr_executed = 0;
+    rom_loader.load_ines_into_bus(file_data, sys.bus);
 
     while (!rl.windowShouldClose()) {
+        // Update system state
+        sys.running = state.cpu_status_cpu_running;
+
+        // Run CPU
+        sys.runAt(60);
+
         gui.windowDraggingLogic(&state);
 
         {  // Frame drawing scope
@@ -62,8 +66,8 @@ pub fn main() !void {
 
             {  // Ui Drawing scope
                 gui.menuBar(&state);
-                gui.debugger(&state, state.debugger_window_pos, &debugger, &cpu, &cycles_executed, alloc);
-                gui.cpuStatus(&state, state.cpu_status_window_pos, @TypeOf(cpu), &cpu, cycles_executed, 0);
+                gui.debugger(&state, state.debugger_window_pos, &sys, alloc);
+                gui.cpuStatus(&state, state.cpu_status_window_pos, @TypeOf(sys.cpu), &sys.cpu, sys.cycles_executed, sys.instructions_executed);
             }
         }
     }

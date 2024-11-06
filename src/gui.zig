@@ -2,6 +2,7 @@ const rg = @import("raygui");
 const rl = @import("raylib");
 const std = @import("std");
 const debug = @import("debugger.zig");
+const util = @import("util.zig");
 
 const input_buf_size = 128 + 1;
 
@@ -67,6 +68,7 @@ pub const GuiState = struct {
     cpu_status_window_pos: rl.Vector2 = .{.x = 100, .y = 100},
     cpu_status_window_active: bool = false,
     cpu_status_cpu_running: bool = false,  // If the cpu is currently paused or not to allow for value editing
+    cpu_status_registers_update_flag: bool = true,  // Triggers an update of the register text values, starts true to populate on initial load
     cpu_status_a_register_text: [input_buf_size]u8 = .{0} ** input_buf_size,
     cpu_status_a_register_text_edit: bool = false,
     cpu_status_x_register_text: [input_buf_size]u8 = .{0} ** input_buf_size,
@@ -91,6 +93,7 @@ pub const GuiState = struct {
     debugger_window_pos: rl.Vector2 = .{.x = 300, .y = 400},
     debugger_window_active: bool = false,
     debugger_dissasembly: ?[]debug.InstructionDissasembly = null,  // Only null once at the start of the program
+    debugger_dissasembly_follow: bool = true,  // Controls if dissasembly scroll offset should change to have current instruction visible
     debugger_dissasembly_regen: bool = false,  // Flag to signal that the debugger dissasembly must be regenerated (free and assign to new result)
     debugger_dissasembly_address: u16 = 0,
     debugger_dissasembly_address_text: [input_buf_size]u8 = .{0} ** input_buf_size,
@@ -98,7 +101,15 @@ pub const GuiState = struct {
     debugger_dissasembly_scroll_region_height: f32 = 0,
     debugger_dissasembly_scroll_offset: rl.Vector2 = .{.x = 0, .y = 0},
     debugger_dissasembly_scroll_view: rl.Rectangle = .{.x = 0, .y = 0, .width = 0, .height = 0},
-    debugger_dissasembly_text_buffer: std.ArrayList(u8)
+    debugger_dissasembly_text_buffer: std.ArrayList(u8),
+
+    // Attempts to clear all used heap from this allocator
+    pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
+        self.debugger_dissasembly_text_buffer.deinit();
+        if (self.debugger_dissasembly) |p| {
+            alloc.free(p);
+        }
+    }
 };
 
 pub const MenuBarItem = enum {
@@ -129,8 +140,10 @@ pub fn menuBar(state: *GuiState) void {
     if (rg.guiButton(.{
         .x = 200, .y = 8,
         .width = 88, .height = 48
-    }, if (state.cpu_status_window_active) "> CPU STATUS" else "CPU STATUS") > 0)
+    }, if (state.cpu_status_window_active) "> CPU STATUS" else "CPU STATUS") > 0) {
         state.cpu_status_window_active = !state.cpu_status_window_active;
+        state.cpu_status_registers_update_flag = true;
+    }
     _ = rg.guiButton(.{
         .x = 296, .y = 8,
         .width = 88, .height = 48
@@ -138,7 +151,7 @@ pub fn menuBar(state: *GuiState) void {
 }
 
 const dissasembly_line_height = 18;
-pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugger, cpu: anytype, cycles: *usize, alloc: std.mem.Allocator) void {
+pub fn debugger(state: *GuiState, pos: rl.Vector2, system: *util.NesSystem, alloc: std.mem.Allocator) void {
     const anchor = pos;
     if (state.debugger_window_active) {
         // TODO: verify cpu has debugger attached, if not, then attach
@@ -154,7 +167,6 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
             .x = anchor.x + 8, .y = anchor.y + 32,
             .width = 32, .height = 32
         }, "#131#") > 0) {
-            logic_debugger.pause = false;
             state.cpu_status_cpu_running = true;
         }
 
@@ -163,7 +175,6 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
             .x = anchor.x + 48, .y = anchor.y + 32,
             .width = 32, .height = 32
         }, "#132#") > 0) {
-            logic_debugger.pause = true;
             state.cpu_status_cpu_running = false;
         }
 
@@ -173,15 +184,34 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
             .width = 72, .height = 24
         }, "STEP INSTR");
 
-        // TODO: Replace with call to proper system ticker function
         // Step forward 1 cycle
         if (rg.guiButton(.{
             .x = anchor.x + 8, .y = anchor.y + 104,
             .width = 72, .height = 24
         }, "STEP CYCLE") > 0) {
-            if (cpu.tick()) |_| {
-                cycles.* += 1;
-            } else |_| {}
+            state.cpu_status_registers_update_flag = true;
+            system.running = true;
+            system.tick();
+            system.running = false;
+            // Scroll to PC + 8 line offset
+            if (state.debugger_dissasembly_follow) {
+                if (getScrollToInstruction(state.debugger_dissasembly.?, system.last_instr_address)) |v| {
+                    state.debugger_dissasembly_scroll_offset.y = @floatFromInt(v + dissasembly_line_height * 8);
+                }
+            }
+        }
+        
+        // Toggle follow current instruction
+        if (rg.guiCheckBox(.{
+            .x = anchor.x + 8, .y = anchor.y + 168,
+            .width = 24, .height = 24
+        }, "FOLLOW", &state.debugger_dissasembly_follow) != 0) {
+            // Scroll to PC + 8 line offset
+            if (state.debugger_dissasembly_follow) {
+                if (getScrollToInstruction(state.debugger_dissasembly.?, system.last_instr_address)) |v| {
+                    state.debugger_dissasembly_scroll_offset.y = @floatFromInt(v + dissasembly_line_height * 8);
+                }
+            }
         }
 
         // TODO: Draw some colored text below to indicate the execution status
@@ -226,27 +256,47 @@ pub fn debugger(state: *GuiState, pos: rl.Vector2, logic_debugger: *debug.Debugg
 
             // Regenerate dissasembly
             if (state.debugger_dissasembly_regen) {
-                state.debugger_dissasembly_regen = false;
+                defer state.debugger_dissasembly_regen = false;
                 if (state.debugger_dissasembly) |d| alloc.free(d);
 
                 // Read reset vector to signify where to start dissasembly
-                const reset_vector: u16 = @as(u16, cpu.safeBusReadConst(0xFFFD)) << 8 | cpu.safeBusReadConst(0xFFFC);
-                state.debugger_dissasembly = debug.dissasemble(cpu, .from_to, .{.start = reset_vector, .end = reset_vector + 0x0FFF, .alloc = alloc, .on_fail = .ignore}) catch unreachable;
+                const reset_vector: u16 = @as(u16, system.cpu.safeBusReadConst(0xFFFD)) << 8 | system.cpu.safeBusReadConst(0xFFFC);
+                state.debugger_dissasembly = debug.dissasemble(system.cpu, .from_to, .{.start = reset_vector, .end = 0xFFFF, .alloc = alloc, .on_fail = .ignore}) catch unreachable;
 
                 // Count pixels needed to show all lines + top and bottom margins
                 state.debugger_dissasembly_scroll_region_height = @floatFromInt(dissasembly_line_height * state.debugger_dissasembly.?.len + 8 + 8);
+            }
+
+            // If cpu is running, scroll to follow current instruction + some padding
+            if (state.cpu_status_cpu_running and state.debugger_dissasembly_follow) {
+                // Linear search dissasembly to find offset
+                // If instruction cant be found, dont change scroll
+                state.debugger_dissasembly_scroll_offset.y = if (getScrollToInstruction(
+                    state.debugger_dissasembly.?, system.last_instr_address
+                )) |v| @floatFromInt(v + dissasembly_line_height * 8) else state.debugger_dissasembly_scroll_offset.y;
             }
 
             dissasemblyWindow(
                 .{.x = anchor.x + 88, .y = anchor.y + 32},
                 state.debugger_dissasembly_scroll_offset.y,
                 state.debugger_dissasembly.?,
-                cpu.program_counter
+                system.last_instr_address
             );
         }
     }
 }
 
+// Address must be opcode aligned
+fn getScrollToInstruction(dis: []const debug.InstructionDissasembly, instr_addr: u16) ?i32 {
+    for (dis, 0..) |d, i| {
+        if (d.pc == instr_addr) {
+            return -dissasembly_line_height * @as(i32, @intCast(i));
+        }
+    }
+    return null;
+}
+
+// address must be opcode aligned for correct instruction highlight!
 fn dissasemblyWindow(pos: rl.Vector2, scroll: f32, dissasembly: []const debug.InstructionDissasembly, address: u16) void {
     const anchor = pos;
     var buf: [32]u8 = .{0} ** 32;
@@ -260,7 +310,6 @@ fn dissasemblyWindow(pos: rl.Vector2, scroll: f32, dissasembly: []const debug.In
         const y_pos = @as(f32, @floatFromInt(8 + i * dissasembly_line_height)) + scroll;
         var x_pos: f32 = 8;
 
-        // TODO: Do this check with op code alligned address
         // Draw colored box to indicate current op_code address
         if (d.pc >= address and d.pc < address + d.len and !pc_line_drawn) {
             pc_line_drawn = true;
@@ -374,7 +423,12 @@ pub fn cpuStatus(state: *GuiState, pos: rl.Vector2, CPU: type, cpu: *const CPU, 
     const anchor: rl.Vector2 = pos;
     if (state.cpu_status_window_active) {
         // Update gui state with cpu values
-        if (state.cpu_status_cpu_running) {
+        if (state.cpu_status_cpu_running or state.cpu_status_registers_update_flag) {
+            defer state.cpu_status_registers_update_flag = false;
+            @memset(&state.cpu_status_a_register_text, 0);
+            @memset(&state.cpu_status_x_register_text, 0);
+            @memset(&state.cpu_status_y_register_text, 0);
+            @memset(&state.cpu_status_pc_text, 0);
             _ = std.fmt.bufPrint(state.cpu_status_a_register_text[0..2], "{X:0>2}", .{cpu.a_register}) catch {};
             _ = std.fmt.bufPrint(state.cpu_status_x_register_text[0..2], "{X:0>2}", .{cpu.x_register}) catch {};
             _ = std.fmt.bufPrint(state.cpu_status_y_register_text[0..2], "{X:0>2}", .{cpu.y_register}) catch {};
@@ -397,7 +451,10 @@ pub fn cpuStatus(state: *GuiState, pos: rl.Vector2, CPU: type, cpu: *const CPU, 
         if (rg.guiWindowBox(.{
             .x = anchor.x, .y = anchor.y,
             .height = window_bounds.cpu_status.y, .width = window_bounds.cpu_status.x
-        }, "CPU Status") > 0) state.cpu_status_window_active = false;
+        }, "CPU Status") > 0) {
+            state.cpu_status_registers_update_flag = true;
+            state.cpu_status_window_active = false;
+        }
 
         // A register
         if (labeledInput(

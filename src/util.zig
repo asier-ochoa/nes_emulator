@@ -1,12 +1,87 @@
 const std = @import("std");
 const Bus = @import("bus.zig");
 const CPU = @import("6502.zig");
+const debug = @import("debugger.zig");
+const rl = @import("raylib");
+
+pub const NesSystem = struct {
+    const Self = @This();
+
+    alloc: std.mem.Allocator,
+
+    cpu: CPU.CPU(NesBus),
+    bus: *NesBus,  // Have to do this because of circular dependencies and such
+    debugger: debug.Debugger,
+
+    cycles_executed: usize = 0,
+    instructions_executed: usize = 0,
+    last_instr_address: u16 = 0,
+
+    running: bool = false,  // Determines if cpu should run
+
+    pub fn init(alloc: std.mem.Allocator) !Self {
+        const heap_bus = try alloc.create(NesBus);
+        heap_bus.* = NesBus.init();
+        return .{
+            .alloc = alloc,
+            .cpu = CPU.CPU(@TypeOf(heap_bus.*)).init(heap_bus),
+            .bus = heap_bus,
+            .debugger = debug.Debugger.init(alloc)
+        };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.alloc.destroy(self.bus);
+    }
+
+    // Executes system cycles for a certain amount of millisenconds since frame start
+    // All time values must be given in millis
+    pub fn runFullSpeedFor(self: *Self, start_time: i64, time: i64) void {
+        const end_time = start_time + time;
+        while (std.time.milliTimestamp() < end_time) {
+            self.tick();
+        }
+    }
+
+    // Executes system cycles at a certain frequency in hz
+    // Minimum tick rate will always be tied to framerate
+    pub fn runAt(self: *Self, freq: i64) void {
+        const fps = rl.getFPS();
+        if (fps > 0) {
+            var cycles_per_frame = @divFloor(freq, rl.getFPS());
+            cycles_per_frame += if (cycles_per_frame == 0) 1 else 0;
+            for (0..@intCast(cycles_per_frame)) |_| {
+                self.tick();
+            }
+        }
+    }
+
+    // Ticks a single clock cycle
+    pub fn tick(self: *Self) void {
+        if (self.running) {
+            self.cpu.tick() catch {
+                std.debug.print("Last Instruction was at address {X:0<4}\n", .{self.last_instr_address});
+                @panic("Reached illegal instruction");
+            };
+            self.cycles_executed += 1;
+            // Count instruction when on fetch cycle
+            if (self.cpu.current_instruction_cycle == 0) {
+                self.instructions_executed += 1;
+                self.last_instr_address = self.cpu.program_counter;
+            }
+        }
+    }
+
+    pub fn tickInstruction() void {
+
+    }
+};
 
 // Reset vector is placed at 0x0200 so as to be outside the zeropage and stack
 pub const TestBus = Bus.Bus(struct {
     @"0000-EFFF": [0xf000]u8,
     // Gap to allow for error handling tests
-    @"FFFC-FFFF": [0x0004]u8 = [_]u8{0x02, 0x00, 0, 0}
+    @"FFFC-FFFF": [0x0004]u8 = .{0x02, 0x00, 0, 0}
 });
 
 pub const NesBus = Bus.Bus(struct {
@@ -97,4 +172,12 @@ test "NesBus Wrapping read" {
     
     try bus.cpuWrite(0x0400 + 0x0800, 0xF4);
     try std.testing.expectEqual(0xF4, try bus.cpuRead(0x0400));
+}
+
+test "NesSystem Sanity check" {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    const alloc = gpa.allocator();
+    var sys = try NesSystem.init(alloc);
+    sys.bus.memory_map.@"0000-07FF"[0] = 0x20;
+    try std.testing.expectEqual(0x20, sys.cpu.safeBusRead(0x0000));
 }
