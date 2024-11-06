@@ -25,9 +25,7 @@ pub fn main() !void {
     sys.cpu.stack_pointer = 0xFD;
 
     // Initialize GUI state
-    var state: gui.GuiState = .{
-        .debugger_dissasembly_text_buffer = std.ArrayList(u8).init(alloc)
-    };
+    var state = gui.GuiState.init(alloc);
     defer state.deinit(alloc);
 
     // Initialize window
@@ -50,7 +48,7 @@ pub fn main() !void {
 
     while (!rl.windowShouldClose()) {
         // Update system state
-        sys.running = state.cpu_status_cpu_running;
+        sys.running = state.cpu_status.cpu_running;
 
         // Run CPU
         sys.runAt(60);
@@ -66,8 +64,8 @@ pub fn main() !void {
 
             {  // Ui Drawing scope
                 gui.menuBar(&state);
-                gui.debugger(&state, state.debugger_window_pos, &sys, alloc);
-                gui.cpuStatus(&state, state.cpu_status_window_pos, @TypeOf(sys.cpu), &sys.cpu, sys.cycles_executed, sys.instructions_executed);
+                state.debugger.draw(&state.cpu_status, &sys, alloc);
+                state.cpu_status.draw(@TypeOf(sys.cpu), &sys.cpu, sys.cycles_executed, sys.instructions_executed);
             }
         }
     }
