@@ -11,6 +11,7 @@ pub const input_buf_size = 128 + 1;
 pub const window_bounds = struct {
     pub const cpu_status: rl.Vector2 = .{.y = 128, .x = 376};
     pub const debugger: rl.Vector2 = .{.x = 320, .y = 504};
+    pub var ptrn_tbl: rl.Vector2 = @import("windows/ptrn_tbl.zig").bounds(.default);
 };
 
 // TODO: Don't allow windows to be dragged off the edge
@@ -69,16 +70,19 @@ pub const GuiState = struct {
 
     cpu_status: @import("windows/cpu_status.zig") = .{},
     debugger: @import("windows/debugger.zig"),
+    ptrn_tbl: @import("windows/ptrn_tbl.zig"),
 
-    pub fn init(alloc: std.mem.Allocator) @This() {
+    pub fn init(alloc: std.mem.Allocator) !@This() {
         return .{
-            .debugger = @import("windows/debugger.zig").init(alloc)
+            .debugger = @import("windows/debugger.zig").init(alloc),
+            .ptrn_tbl = try @import("windows/ptrn_tbl.zig").init(alloc),
         };
     }
 
     // Attempts to clear all used heap from this allocator
     pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
         self.debugger.deinit(alloc);
+        self.ptrn_tbl.deinit(alloc);
     }
 };
 
@@ -87,7 +91,8 @@ pub const MenuBarItem = enum {
     file,
     debugger,
     cpu_status,
-    memory
+    ptrn_tbl,
+    memory,
 };
 
 pub fn menuBar(state: *GuiState) void {
@@ -114,8 +119,14 @@ pub fn menuBar(state: *GuiState) void {
         state.cpu_status.window_active = !state.cpu_status.window_active;
         state.cpu_status.registers_update_flag = true;
     }
-    _ = rg.guiButton(.{
+    if (rg.guiButton(.{
         .x = 296, .y = 8,
+        .width = 88, .height = 48
+    }, if (state.ptrn_tbl.window_active) "> PTRN TBL" else "PTRN TBL") > 0) {
+        state.ptrn_tbl.window_active = !state.ptrn_tbl.window_active;
+    }
+    _ = rg.guiButton(.{
+        .x = 392, .y = 8,
         .width = 88, .height = 48
     }, "MEMORY");
 }

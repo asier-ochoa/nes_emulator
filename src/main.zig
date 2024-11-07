@@ -25,7 +25,7 @@ pub fn main() !void {
     sys.cpu.stack_pointer = 0xFD;
 
     // Initialize GUI state
-    var state = gui.GuiState.init(alloc);
+    var state = try gui.GuiState.init(alloc);
     defer state.deinit(alloc);
 
     // Initialize window
@@ -44,7 +44,7 @@ pub fn main() !void {
     const file_data = try alloc.alloc(u8, (try file.metadata()).size());
     defer _ = alloc.free(file_data);
     _ = try file.readAll(file_data);
-    rom_loader.load_ines_into_bus(file_data, sys.bus);
+    rom_loader.load_ines_into_bus(file_data, &sys);
 
     while (!rl.windowShouldClose()) {
         // Update system state
@@ -64,6 +64,7 @@ pub fn main() !void {
 
             {  // Ui Drawing scope
                 gui.menuBar(&state);
+                state.ptrn_tbl.draw(&gui.window_bounds.ptrn_tbl);
                 state.debugger.draw(&state.cpu_status, &sys, alloc);
                 state.cpu_status.draw(@TypeOf(sys.cpu), &sys.cpu, sys.cycles_executed, sys.instructions_executed);
             }

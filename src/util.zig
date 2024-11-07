@@ -3,6 +3,7 @@ const Bus = @import("bus.zig");
 const CPU = @import("6502.zig");
 const debug = @import("debugger.zig");
 const rl = @import("raylib");
+const PPU = @import("ppu.zig");
 
 pub const NesSystem = struct {
     const Self = @This();
@@ -11,6 +12,7 @@ pub const NesSystem = struct {
 
     cpu: CPU.CPU(NesBus),
     bus: *NesBus,  // Have to do this because of circular dependencies and such
+    ppu: PPU,
     debugger: debug.Debugger,
 
     cycles_executed: usize = 0,
@@ -25,6 +27,7 @@ pub const NesSystem = struct {
         return .{
             .alloc = alloc,
             .cpu = CPU.CPU(@TypeOf(heap_bus.*)).init(heap_bus),
+            .ppu = PPU.init(),
             .bus = heap_bus,
             .debugger = debug.Debugger.init(alloc)
         };
