@@ -185,7 +185,7 @@ fn dissasemblyWindow(pos: rl.Vector2, scroll: f32, dissasembly: []const debug.In
     var buf: [32]u8 = .{0} ** 32;
 
     // Line from which to start rendering, with 1 line of overdraw
-    const start_dissasembly: usize = @divFloor(@abs(@as(i64, @intFromFloat(scroll))), dissasembly_line_height) -| 1;
+    const start_dissasembly: usize = @divTrunc(@abs(@as(i64, @intFromFloat(scroll))), dissasembly_line_height) -| 1;
     const end_dissasembly: usize = if (start_dissasembly + 34 > dissasembly.len - 1) dissasembly.len - 1 else start_dissasembly + 34;
 
     var pc_line_drawn = false;

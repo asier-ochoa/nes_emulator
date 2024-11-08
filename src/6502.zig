@@ -1302,7 +1302,7 @@ test "Full Instruction Rom (nestest.nes)" {
         std.debug.print("{d} cycles executed at a speed of {d:.3} Mhz in {d} ms|", .{
             cycles_executed,
             1 / (@as(f64, @floatFromInt(end_time - start_time)) / @as(f64, @floatFromInt(cycles_executed))),
-            @divFloor(end_time - start_time, 1000)
+            @divTrunc(end_time - start_time, 1000)
         });
     }
 

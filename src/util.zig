@@ -51,7 +51,7 @@ pub const NesSystem = struct {
     pub fn runAt(self: *Self, freq: i64) void {
         const fps = rl.getFPS();
         if (fps > 0) {
-            var cycles_per_frame = @divFloor(freq, rl.getFPS());
+            var cycles_per_frame = @divTrunc(freq, rl.getFPS());
             cycles_per_frame += if (cycles_per_frame == 0) 1 else 0;
             for (0..@intCast(cycles_per_frame)) |_| {
                 self.tick();

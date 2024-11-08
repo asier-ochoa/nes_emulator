@@ -6,9 +6,29 @@ pub fn load_ines_into_bus(data: []const u8, sys: *util.NesSystem) void {
     const header = data[0..16];
     const prg_size = @as(u32, header[4]) * 16384;
     const chr_size = @as(u32, header[5]) * 8192;
-    _ = chr_size;
     const mapper = header[6] >> 4;
-    _ = mapper;
 
+    std.debug.print(
+        \\INES file stats:
+        \\  - Mapper ID: {}
+        \\  - PRG Banks: {} | Size: {} bytes
+        \\  - CHR Banks: {} | Size: {} bytes | Starts at: 0x{X:0>4}
+        \\
+        , .{
+            mapper,
+            @divTrunc(prg_size, 16384),
+            prg_size,
+            @divTrunc(chr_size, 8192),
+            chr_size,
+            16 + prg_size + sys.ppu.pattern_tables[0].len,
+        },
+    );
+
+    // Copy prg to cpu rom address space
     std.mem.copyForwards(u8, &sys.bus.memory_map.@"4020-FFFF".rom, data[16..16 + prg_size]);
+
+    // Copy chr to ppu mem
+    std.mem.copyForwards(u8, &sys.ppu.pattern_tables[0], data[16 + prg_size..16 + prg_size + sys.ppu.pattern_tables[0].len]);
+    std.mem.copyForwards(u8, &sys.ppu.pattern_tables[1], data[16 + prg_size + sys.ppu.pattern_tables[0].len..16 + prg_size + sys.ppu.pattern_tables[1].len * 2]);
+
 }
