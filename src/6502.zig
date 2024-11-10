@@ -1274,24 +1274,23 @@ pub const AddressingMode = enum {
 };
 
 test "Full Instruction Rom (nestest.nes)" {
-    // Declare allocators
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const alloc = arena.allocator();
+    const alloc = std.testing.allocator;
 
     // Load roms
     const nestest_rom = @embedFile("./resources/nestest.nes");
     const ref_log = @embedFile("./resources/nestest_log_reference.log");
 
     // Setup CPUs
-    var bus = util.NesBus.init();
-    var cpu = CPU(@TypeOf(bus)).init(&bus);
-    cpu.program_counter = 0xC000;
-    cpu.stack_pointer = 0xFD;
+    var sys = try util.NesSystem.init(alloc);
+    defer sys.deinit();
+    sys.cpu.program_counter = 0xC000;
+    sys.cpu.stack_pointer = 0xFD;
 
-    rom_loader.load_ines_into_bus(nestest_rom, &bus);
+    rom_loader.load_ines_into_bus(nestest_rom, &sys);
 
     // Setup writer for the execution log
     var buffer = std.ArrayList(u8).init(alloc);
+    defer buffer.deinit();
     const log_writer = buffer.writer();
 
     // Setup performance metrics
@@ -1309,25 +1308,25 @@ test "Full Instruction Rom (nestest.nes)" {
     // TODO: Replace this terribleness with proper handling of BRK
     // Need to do this because the initial BRK is not implemented
     {
-        const dis = try debug.dissasemble(cpu, .current_instruction, .{.record_state = true});
+        const dis = try debug.dissasemble(sys.cpu, .current_instruction, .{.record_state = true});
         try log_writer.print("{X:0>4}  ", .{dis.pc});
         for (dis.op_codes) |op| {
             if (op) |o| try log_writer.print("{X:0>2} ", .{o}) else try log_writer.print("   ", .{});
         }
         try log_writer.print(" {any: <32}", .{dis});
-        try log_writer.print("{any} CYC:{}\n", .{cpu, 7});
+        try log_writer.print("{any} CYC:{}\n", .{sys.cpu, 7});
     }
     while (true) : (cycles_executed += 1) {
-        try cpu.tick();
+        try sys.cpu.tick();
 
-        if (cpu.current_instruction_cycle == 0) {
-            const dis = try debug.dissasemble(cpu, .current_instruction, .{.record_state = true});
+        if (sys.cpu.current_instruction_cycle == 0) {
+            const dis = try debug.dissasemble(sys.cpu, .current_instruction, .{.record_state = true});
             try log_writer.print("{X:0>4}  ", .{dis.pc});
             for (dis.op_codes) |op| {
                 if (op) |o| try log_writer.print("{X:0>2} ", .{o}) else try log_writer.print("   ", .{});
             }
             try log_writer.print(" {any: <32}", .{dis});
-            try log_writer.print("{any} CYC:{}\n", .{cpu, cycles_executed});
+            try log_writer.print("{any} CYC:{}\n", .{sys.cpu, cycles_executed});
         }
 
         // End execution before illegal instructions start

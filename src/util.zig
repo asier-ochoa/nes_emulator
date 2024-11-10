@@ -133,12 +133,12 @@ pub const NesBus = Bus.Bus(struct {
     },
     @"4020-FFFF": struct {  // Unmapped, used for cartriges TODO: figure out how to design the mappers
         const Self = @This();
-        rom: [0x4000]u8,
+        rom: [0x8000]u8,
         pub fn onRead(self: *Self, address: u16, _: anytype) u8 {
-            return if (address >= 0x8000) self.rom[@mod(address - 0x8000, 0x4000)] else 0;
+            return if (address >= 0x8000) self.rom[address - 0x8000] else 0;
         }
         pub fn onReadConst(self: Self, address: u16, _: anytype) u8 {
-            return if (address >= 0x8000) self.rom[@mod(address - 0x8000, 0x4000)] else 0;
+            return if (address >= 0x8000) self.rom[address - 0x8000] else 0;
         }
         pub fn onWrite(_: *Self, _: u16, _: u8, _: anytype) void {}
     }

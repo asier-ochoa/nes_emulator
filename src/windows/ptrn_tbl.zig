@@ -5,10 +5,10 @@ const util = @import("../util.zig");
 
 pub fn bounds(tag: enum {default, scaled, both, scaled_both}) rl.Vector2 {
     return ([_]rl.Vector2{
-        .{.x = 320, .y = 272},
-        .{.x = 320, .y = 408},
-        .{.x = 320, .y = 272},
-        .{.x = 568, .y = 408},
+        .{.x = 284, .y = 272},
+        .{.x = 424, .y = 544},
+        .{.x = 296, .y = 272},
+        .{.x = 840, .y = 544},
     })[@intFromEnum(tag)];
 }
 
@@ -21,7 +21,7 @@ window_active: bool = false,
 framebuffers: [2]rl.Image,
 fb_textures: [2]rl.Texture,
 draw_grid: bool = false,
-two_scaling: bool = false,
+three_scaling: bool = false,
 active_table_display: i32 = 0,
 
 pub fn init(alloc: std.mem.Allocator) !@This() {
@@ -62,21 +62,21 @@ pub fn draw(self: *@This(), w_bounds: *rl.Vector2, sys: *const util.NesSystem) v
         // the framebuffer is. Determined by state.
         const new_anchor = blk: {
             // base scale with 1 table
-            if (!self.two_scaling and self.active_table_display != 2) {
+            if (!self.three_scaling and self.active_table_display != 2) {
                 w_bounds.* = bounds(.default);
                 break :blk anchor.add(.{.x = 8, .y = 168});
             // base scale with 2 tables
-            } else if (!self.two_scaling and self.active_table_display == 2) {
+            } else if (!self.three_scaling and self.active_table_display == 2) {
                 w_bounds.* = bounds(.both);
                 break :blk anchor.add(.{.x = 8, .y = 168});
-            // 2x scale with 1 table
-            } else if (self.two_scaling and self.active_table_display != 2){
+            // 3x scale with 1 table
+            } else if (self.three_scaling and self.active_table_display != 2){
                 w_bounds.* = bounds(.scaled);
-                break :blk anchor.add(.{.x = 8, .y = 304});
-            // 2x scale with 2 tables
+                break :blk anchor.add(.{.x = 8, .y = 440});
+            // 3x scale with 2 tables
             } else {
                 w_bounds.* = bounds(.scaled_both);
-                break :blk anchor.add(.{.x = 8, .y = 304});
+                break :blk anchor.add(.{.x = 8, .y = 440});
             }
         };
 
@@ -89,7 +89,7 @@ pub fn draw(self: *@This(), w_bounds: *rl.Vector2, sys: *const util.NesSystem) v
         }
 
         // Panel around framebuffer
-        const panel_size: f32 = if (!self.two_scaling) 136 else 136 * 2;
+        const panel_size: f32 = if (!self.three_scaling) 136 else 136 * 3;
         _ = rg.guiPanel(.{
             .x = anchor.x + 8, .y = anchor.y + 32,
             .width = panel_size, .height = panel_size,
@@ -112,7 +112,7 @@ pub fn draw(self: *@This(), w_bounds: *rl.Vector2, sys: *const util.NesSystem) v
         _ = rg.guiCheckBox(.{
             .x = new_anchor.x, .y = new_anchor.y + 40,
             .width = 24, .height = 24
-        }, "2X SCALE", &self.two_scaling);
+        }, "3X SCALE", &self.three_scaling);
 
         // Choose which tbl to display
         _ = rg.guiToggleGroup(.{
@@ -120,7 +120,7 @@ pub fn draw(self: *@This(), w_bounds: *rl.Vector2, sys: *const util.NesSystem) v
             .width = 88, .height = 24
         }, "TBL0;TBL1;BOTH", &self.active_table_display);
 
-        update_framebuffer(self, sys);
+        update_framebuffer(self, sys, self.draw_grid);
 
         // Draw final framebuffer
         const fb_idx = if (self.active_table_display != 2) self.active_table_display else 0;
@@ -145,7 +145,9 @@ pub fn draw(self: *@This(), w_bounds: *rl.Vector2, sys: *const util.NesSystem) v
 
 // - Draws pattern table into cpu framebuffer
 // - Updates texture framebuffer
-pub fn update_framebuffer(self: *@This(), sys: *const util.NesSystem) void {
+// - Conditionally draws a grid
+const grid_color = std.mem.nativeToBig(u32, 0xE50A7BFF);
+pub fn update_framebuffer(self: *@This(), sys: *const util.NesSystem, draw_grid: bool) void {
     const tmp_color_palette = .{
         std.mem.nativeToBig(u32, 0x000000FF),
         std.mem.nativeToBig(u32, 0xFF0000FF),
@@ -160,6 +162,19 @@ pub fn update_framebuffer(self: *@This(), sys: *const util.NesSystem) void {
             // Draw to simple 1D buffer
             var decoded: [8 * 8]u32 = .{0} ** (8 * 8);
             @TypeOf(sys.ppu).decodePatternTile(tbl[i * 16..(i + 1) * 16], &tmp_color_palette, &decoded);
+
+            // Insert vertical and horizontal line
+            if (draw_grid) {
+                // Draw horizontal
+                std.mem.copyForwards(u32, decoded[8 * 7..8 * 8], &(.{grid_color} ** 8)) ;
+                // Draw vertical
+                for (0..8 * 8) |px_idx| {
+                    if (@mod(px_idx, 8) == 7) {
+                        decoded[px_idx] = grid_color;
+                    }
+                }
+            }
+
             fb.drawImage(.{
                 .data = @ptrCast(&decoded),
                 .format = .pixelformat_uncompressed_r8g8b8a8,

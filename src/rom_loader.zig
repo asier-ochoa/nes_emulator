@@ -26,6 +26,10 @@ pub fn load_ines_into_bus(data: []const u8, sys: *util.NesSystem) void {
 
     // Copy prg to cpu rom address space
     std.mem.copyForwards(u8, &sys.bus.memory_map.@"4020-FFFF".rom, data[16..16 + prg_size]);
+    // Copy same region twice if prg doesn't cover full 32 kb
+    if (prg_size <= 16384) {
+        std.mem.copyForwards(u8, sys.bus.memory_map.@"4020-FFFF".rom[prg_size..], data[16..16 + prg_size]);
+    }
 
     // Copy chr to ppu mem
     std.mem.copyForwards(u8, &sys.ppu.pattern_tables[0], data[16 + prg_size..16 + prg_size + sys.ppu.pattern_tables[0].len]);
