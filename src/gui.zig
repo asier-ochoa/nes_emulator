@@ -9,7 +9,7 @@ pub const input_buf_size = 128 + 1;
 // Width and height of windows
 // Order of fields determines order of dragging collision check. MAKE SURE ITS IN SYNC WITH DRAWING CODE
 pub const window_bounds = struct {
-    pub const cpu_status: rl.Vector2 = .{.y = 128, .x = 376};
+    pub const cpu_status: rl.Vector2 = .{.y = 176, .x = 376};
     pub const debugger: rl.Vector2 = .{.x = 320, .y = 504};
     pub var ptrn_tbl: rl.Vector2 = @import("windows/ptrn_tbl.zig").bounds(.default);
 };

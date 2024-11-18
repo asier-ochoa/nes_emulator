@@ -64,7 +64,7 @@ pub fn main() !void {
                 gui.menuBar(&state);
                 state.ptrn_tbl.draw(&gui.window_bounds.ptrn_tbl, &sys);
                 state.debugger.draw(&state.cpu_status, &sys, alloc);
-                state.cpu_status.draw(@TypeOf(sys.cpu), &sys.cpu, sys.cycles_executed, sys.instructions_executed);
+                state.cpu_status.draw(&sys, sys.cycles_executed, sys.instructions_executed);
 
                 rl.drawFPS(0, 60);
             }
