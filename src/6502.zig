@@ -40,6 +40,7 @@ pub fn CPU(Bus: type) type {
         current_instruction_cycle: i32 = 1,
         data_latch: u16 = 0, // Represents the two internal data latches the 6502 uses to store half addresses when fetching instructions
         indirect_jump: u16 = 0, // USED ONLY FOR JMPind as a latch when fetching real address from base address
+        interrupt_type: InterruptType = .None,
 
         // Bus connection
         bus: *Bus,
@@ -61,19 +62,18 @@ pub fn CPU(Bus: type) type {
             self.current_instruction_cycle += 1;
         }
 
-        // Sets the state to have the tick function follow the reset steps
-        // Since fetching the opcode is not needed, the cycle starts at 1.
-        // When called from BRK instruction, the cycle will correspond
-        pub fn reset(self: *Self) void {
-            self.is_reseting = true;
-            self.current_instruction_cycle = 1;
-        }
-
         fn fetchInstruction(self: *Self) void {
             // Check for interrupts here
+            // Don't increment program counter on hardware interrupt
             if (self.reset_line) {
                 self.instruction_register = instr.BRK.op;
-                self.reset_line = false;
+                self.interrupt_type = .Reset;
+            } else if (self.nmi_line) {
+                self.instruction_register = instr.BRK.op;
+                self.interrupt_type = .NMI;
+            } else if (self.irq_line and !self.isFlagSet(.irq_disable)) {
+                self.instruction_register = instr.BRK.op;
+                self.interrupt_type = .IRQ;
             } else {
                 self.instruction_register = self.safeBusRead(self.program_counter);
                 self.program_counter += 1;
@@ -794,7 +794,11 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.BRK.op => {
                             // Set low byte of interrupt vector
-                            self.program_counter = self.safeBusRead(reset_vector_low);
+                            self.program_counter = self.safeBusRead(switch (self.interrupt_type) {
+                                .None, .Reset => reset_vector_low,
+                                .IRQ, => irq_vector_low,
+                                .NMI, => nmi_vector_low,
+                            });
                         },
                         instr.DECabsX.op, instr.INCabsX.op => {},
                         else => return logIllegalInstruction(self.*)
@@ -814,7 +818,13 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.BRK.op => {
                             // Set high byte of interrupt vector
-                            self.program_counter |= @as(u16, self.safeBusRead(reset_vector_low + 1)) << 8;
+                            self.program_counter |= @as(u16, self.safeBusRead(switch (self.interrupt_type) {
+                                .None, .Reset => reset_vector_low,
+                                .IRQ, => irq_vector_low,
+                                .NMI, => nmi_vector_low,
+                            } + 1)) << 8;
+                            // Reset internal tracking of interrupt
+                            self.interrupt_type = .None;
                             self.endInstruction();
                         },
                         else => return logIllegalInstruction(self.*)
@@ -1299,13 +1309,13 @@ pub const StatusFlag = enum(u8) {
     decimal = 1 << 3,
     brk_command = 1 << 4,
     overflow = 1 << 6,
-    negative = 1 << 7
+    negative = 1 << 7,
 };
 
 pub const CPUError = error {
     IllegalClockState, // When the cpu reaches a "current_instruction_cycle" that doesn't represent any possible state
     IllegalInstruction,
-    NotImplemented
+    NotImplemented,
 };
 
 pub const AddressingMode = enum {
@@ -1322,7 +1332,14 @@ pub const AddressingMode = enum {
     ZeroPageY,
     Indirect,
     IndirectX,
-    IndirectY
+    IndirectY,
+};
+
+pub const InterruptType = enum {
+    None,
+    Reset,
+    NMI,
+    IRQ,
 };
 
 test "Full Instruction Rom (nestest.nes)" {
