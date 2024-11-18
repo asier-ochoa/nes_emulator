@@ -21,15 +21,23 @@ pub fn CPU(Bus: type) type {
         a_register: u8 = 0,
         x_register: u8 = 0,
         y_register: u8 = 0,
-        status_register: u8 = 0x24,
+        status_register: u8 = 0b0010_0000,  // Leave ignored flag set
 
         // Internal physical state
         instruction_register: u8 = 0,
         stack_pointer: u8 = 0,
         program_counter: u16 = 0,
 
+        // External physical state
+        // False is low, true is high
+        irq_line: bool = false,
+        nmi_line: bool = false,
+        reset_line: bool = false,
+
         // Internal logical state
-        current_instruction_cycle: i32 = 0, // Starts at 0, starts at instruction fetch cycle
+        // Starting at 1 helps with initializing the cpu since the IR holds 0 at the start which
+        // gets interpreted as a BRK which then executes a reset sequence
+        current_instruction_cycle: i32 = 1,
         data_latch: u16 = 0, // Represents the two internal data latches the 6502 uses to store half addresses when fetching instructions
         indirect_jump: u16 = 0, // USED ONLY FOR JMPind as a latch when fetching real address from base address
 
@@ -62,8 +70,14 @@ pub fn CPU(Bus: type) type {
         }
 
         fn fetchInstruction(self: *Self) void {
-            self.instruction_register = self.safeBusRead(self.program_counter);
-            self.program_counter += 1;
+            // Check for interrupts here
+            if (self.reset_line) {
+                self.instruction_register = instr.BRK.op;
+                self.reset_line = false;
+            } else {
+                self.instruction_register = self.safeBusRead(self.program_counter);
+                self.program_counter += 1;
+            }
         }
 
         // Master list of all instructions
@@ -114,7 +128,8 @@ pub fn CPU(Bus: type) type {
                         instr.ORAabsX.op, instr.ANDabsX.op, instr.EORabsX.op,
                         instr.ADCabsX.op, instr.SBCabsX.op, instr.CMPabsX.op,
                         instr.ASLabsX.op, instr.RORabsX.op, instr.ROLabsX.op,
-                        instr.LSRabsX.op, instr.INCabsX.op, instr.DECabsX.op => |instruction| {
+                        instr.LSRabsX.op, instr.INCabsX.op, instr.DECabsX.op,
+                        instr.BRK.op => |instruction| {
                             self.data_latch = self.safeBusRead(self.program_counter);
                             self.program_counter += 1;
 
@@ -326,6 +341,14 @@ pub fn CPU(Bus: type) type {
                         instr.CMPindY.op, instr.SBCindY.op => {
                             self.indirect_jump = self.safeBusRead(self.data_latch);
                         },
+                        instr.BRK.op => {
+                            // Push pc high to stack
+                            self.safeBusWrite(
+                                0x0100 | @as(u16, self.stack_pointer),
+                                @intCast(self.program_counter >> 8),
+                            );
+                            self.stack_pointer -%= 1;
+                        },
                         instr.JSRabs.op, instr.LDAindX.op, instr.STAindX.op,
                         instr.ORAindX.op, instr.ANDindX.op, instr.EORindX.op,
                         instr.ADCindX.op, instr.CMPindX.op, instr.SBCindX.op,
@@ -505,6 +528,14 @@ pub fn CPU(Bus: type) type {
                                 else => unreachable
                             }
                         },
+                        instr.BRK.op => {
+                            // Push pc low to stack
+                            self.safeBusWrite(
+                                0x0100 | @as(u16, self.stack_pointer),
+                                @intCast(self.program_counter & 0x00FF),
+                            );
+                            self.stack_pointer -%= 1;
+                        },
                         instr.LSRzpg.op, instr.RORzpg.op, instr.ASLzpg.op,
                         instr.ROLzpg.op, instr.DECzpg.op, instr.INCzpg.op,
                         instr.LSRabs.op, instr.ASLabs.op, instr.RORabs.op,
@@ -643,6 +674,16 @@ pub fn CPU(Bus: type) type {
                                 else => unreachable
                             }
                         },
+                        instr.BRK.op => {
+                            // Push status register to stack
+                            self.safeBusWrite(
+                                0x0100 | @as(u16, self.stack_pointer),
+                                self.status_register,
+                            );
+                            // A reset signal sets irq disable flag
+                            self.setFlag(.irq_disable);
+                            self.stack_pointer -%= 1;
+                        },
                         instr.INCabs.op, instr.DECabs.op, instr.STAindY.op,
                         instr.LSRzpgX.op, instr.ASLzpgX.op, instr.RORzpgX.op,
                         instr.ROLzpgX.op, instr.DECzpgX.op, instr.INCzpgX.op,
@@ -751,6 +792,10 @@ pub fn CPU(Bus: type) type {
                                 else => unreachable
                             }
                         },
+                        instr.BRK.op => {
+                            // Set low byte of interrupt vector
+                            self.program_counter = self.safeBusRead(reset_vector_low);
+                        },
                         instr.DECabsX.op, instr.INCabsX.op => {},
                         else => return logIllegalInstruction(self.*)
                     }
@@ -765,6 +810,11 @@ pub fn CPU(Bus: type) type {
                         },
                         instr.DECabsX.op, instr.INCabsX.op => |instruction| {
                             self.incrementAt(self.data_latch +% self.x_register, instruction == instr.DECabsX.op);
+                            self.endInstruction();
+                        },
+                        instr.BRK.op => {
+                            // Set high byte of interrupt vector
+                            self.program_counter |= @as(u16, self.safeBusRead(reset_vector_low + 1)) << 8;
                             self.endInstruction();
                         },
                         else => return logIllegalInstruction(self.*)
@@ -906,7 +956,9 @@ pub fn CPU(Bus: type) type {
     };
 }
 
-pub const reset_vector_low_order: u16 = 0xfffc;
+pub const reset_vector_low: u16 = 0xFFFC;
+pub const nmi_vector_low: u16 = 0xFFFA;
+pub const irq_vector_low: u16 = 0xFFFE;
 
 // Instruction pneumonics
 pub const instr = struct {
@@ -1283,10 +1335,10 @@ test "Full Instruction Rom (nestest.nes)" {
     // Setup CPUs
     var sys = try util.NesSystem.init(alloc);
     defer sys.deinit();
-    sys.cpu.program_counter = 0xC000;
-    sys.cpu.stack_pointer = 0xFD;
 
     rom_loader.load_ines_into_bus(nestest_rom, &sys);
+    // Patch reset vector rom
+    sys.bus.memory_map.@"4020-FFFF".rom[reset_vector_low - 0x8000] = 0x00;
 
     // Setup writer for the execution log
     var buffer = std.ArrayList(u8).init(alloc);
@@ -1294,7 +1346,7 @@ test "Full Instruction Rom (nestest.nes)" {
     const log_writer = buffer.writer();
 
     // Setup performance metrics
-    var cycles_executed: usize = 8;
+    var cycles_executed: usize = 2;
     const start_time = std.time.microTimestamp();
     defer {
         const end_time = std.time.microTimestamp();
@@ -1305,17 +1357,6 @@ test "Full Instruction Rom (nestest.nes)" {
         });
     }
 
-    // TODO: Replace this terribleness with proper handling of BRK
-    // Need to do this because the initial BRK is not implemented
-    {
-        const dis = try debug.dissasemble(sys.cpu, .current_instruction, .{.record_state = true});
-        try log_writer.print("{X:0>4}  ", .{dis.pc});
-        for (dis.op_codes) |op| {
-            if (op) |o| try log_writer.print("{X:0>2} ", .{o}) else try log_writer.print("   ", .{});
-        }
-        try log_writer.print(" {any: <32}", .{dis});
-        try log_writer.print("{any} CYC:{}\n", .{sys.cpu, 7});
-    }
     while (true) : (cycles_executed += 1) {
         try sys.cpu.tick();
 
