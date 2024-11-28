@@ -2,6 +2,7 @@ const gui = @import("../gui.zig");
 const rl = @import("raylib");
 const rg = @import("raygui");
 const std = @import("std");
+const util = @import("../util.zig");
 
 // Required for windowing
 window_pos: rl.Vector2 = .{.x = 100, .y = 100},
@@ -29,9 +30,12 @@ d_flag: bool = false,
 i_flag: bool = false,
 z_flag: bool = false,
 c_flag: bool = false,
+reset_interrupt_flag: bool = false,
+irq_interrupt_flag: bool = false,
+nmi_interrupt_flag: bool = false,
 
 // TODO: Implement the stack inspector
-pub fn draw(self: *@This(), CPU: type, cpu: *const CPU, cycle_count: u64, instr_count: u64) void {
+pub fn draw(self: *@This(), sys: *util.NesSystem, cycle_count: u64, instr_count: u64) void {
     const anchor: rl.Vector2 = self.window_pos;
     if (self.window_active) {
         // Update gui state with cpu values
@@ -41,21 +45,26 @@ pub fn draw(self: *@This(), CPU: type, cpu: *const CPU, cycle_count: u64, instr_
             @memset(&self.x_register_text, 0);
             @memset(&self.y_register_text, 0);
             @memset(&self.pc_text, 0);
-            _ = std.fmt.bufPrint(self.a_register_text[0..2], "{X:0>2}", .{cpu.a_register}) catch {};
-            _ = std.fmt.bufPrint(self.x_register_text[0..2], "{X:0>2}", .{cpu.x_register}) catch {};
-            _ = std.fmt.bufPrint(self.y_register_text[0..2], "{X:0>2}", .{cpu.y_register}) catch {};
-            _ = std.fmt.bufPrint(self.pc_text[0..4], "{X:0>4}", .{cpu.program_counter}) catch {};
+            _ = std.fmt.bufPrint(self.a_register_text[0..2], "{X:0>2}", .{sys.cpu.a_register}) catch {};
+            _ = std.fmt.bufPrint(self.x_register_text[0..2], "{X:0>2}", .{sys.cpu.x_register}) catch {};
+            _ = std.fmt.bufPrint(self.y_register_text[0..2], "{X:0>2}", .{sys.cpu.y_register}) catch {};
+            _ = std.fmt.bufPrint(self.pc_text[0..4], "{X:0>4}", .{sys.cpu.program_counter}) catch {};
 
-            self.n_flag = cpu.isFlagSet(.negative);
-            self.v_flag = cpu.isFlagSet(.overflow);
-            self.b_flag = cpu.isFlagSet(.brk_command);
-            self.d_flag = cpu.isFlagSet(.decimal);
-            self.i_flag = cpu.isFlagSet(.irq_disable);
-            self.z_flag = cpu.isFlagSet(.zero);
-            self.c_flag = cpu.isFlagSet(.carry);
+            self.n_flag = sys.cpu.isFlagSet(.negative);
+            self.v_flag = sys.cpu.isFlagSet(.overflow);
+            self.b_flag = sys.cpu.isFlagSet(.brk_command);
+            self.d_flag = sys.cpu.isFlagSet(.decimal);
+            self.i_flag = sys.cpu.isFlagSet(.irq_disable);
+            self.z_flag = sys.cpu.isFlagSet(.zero);
+            self.c_flag = sys.cpu.isFlagSet(.carry);
+
+            // Interrupts
+            self.reset_interrupt_flag = sys.cpu.reset_line;
+            self.irq_interrupt_flag = sys.cpu.irq_line;
+            self.nmi_interrupt_flag = sys.cpu.nmi_line;
         }
-        _ = std.fmt.bufPrint(self.ir_text[0..2], "{X:0>2}", .{cpu.instruction_register}) catch {};
-        _ = std.fmt.bufPrint(self.cc_text[0..1], "{}", .{cpu.current_instruction_cycle}) catch {};
+        _ = std.fmt.bufPrint(self.ir_text[0..2], "{X:0>2}", .{sys.cpu.instruction_register}) catch {};
+        _ = std.fmt.bufPrint(self.cc_text[0..1], "{}", .{sys.cpu.current_instruction_cycle}) catch {};
         _ = std.fmt.bufPrint(self.cycles_text[0..20], "{}", .{cycle_count}) catch {};
         _ = std.fmt.bufPrint(self.instr_text[0..20], "{}", .{instr_count}) catch {};
 
@@ -124,13 +133,49 @@ pub fn draw(self: *@This(), CPU: type, cpu: *const CPU, cycle_count: u64, instr_
             "instr:", @ptrCast(&self.instr_text)
         );
 
-        self.statusFlags(.{.x = anchor.x + 200, .y = anchor.y + 64}, CPU, cpu);
+        self.statusFlags(anchor.add(.{.x = 200, .y = 64}));
+        self.interrupts(anchor.add(.{.x = 8, .y = 128}), sys);
     }
 }
 
-fn statusFlags(self: *@This(), pos: rl.Vector2, CPU: type, cpu: *const CPU) void {
-    _ = cpu;
-    const anchor: rl.Vector2 = pos;
+fn setValueInCpu(self: @This(), value: anytype, cpu_var: *@TypeOf(value)) void {
+    // Only allow modification when cpu is not running
+    if (self.cpu_running) return else {
+        cpu_var.* = value;
+    }
+}
+
+fn interrupts(self: *@This(), pos: rl.Vector2, sys: *util.NesSystem) void {
+    const anchor = pos;
+    _ = rg.guiGroupBox(.{
+        .x = anchor.x, .y = anchor.y,
+        .width = 360, .height = 40,
+    }, "INTERRUPTS");
+
+    if (rg.guiCheckBox(.{
+        .x = anchor.x + 8, .y = anchor.y + 8,
+        .width = 24, .height = 24,
+    }, "RESET", &self.reset_interrupt_flag) > 0) {
+        self.setValueInCpu(self.reset_interrupt_flag, &sys.cpu.reset_line);
+    }
+
+    if (rg.guiCheckBox(.{
+        .x = anchor.x + 80, .y = anchor.y + 8,
+        .width = 24, .height = 24,
+    }, "IRQ", &self.irq_interrupt_flag) > 0) {
+        self.setValueInCpu(self.irq_interrupt_flag, &sys.cpu.irq_line);
+    }
+
+    if (rg.guiCheckBox(.{
+        .x = anchor.x + 136, .y = anchor.y + 8,
+        .width = 24, .height = 24,
+    }, "NMI", &self.nmi_interrupt_flag) > 0) {
+        self.setValueInCpu(self.nmi_interrupt_flag, &sys.cpu.nmi_line);
+    }
+}
+
+fn statusFlags(self: *@This(), pos: rl.Vector2) void {
+    const anchor = pos;
     _ = rg.guiGroupBox(.{
         .x = anchor.x, .y = anchor.y,
         .width = 168, .height = 56
