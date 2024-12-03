@@ -3,12 +3,14 @@ const rl = @import("raylib");
 const std = @import("std");
 const debug = @import("debugger.zig");
 const util = @import("util.zig");
+const PPU = @import("ppu.zig");
 
 pub const input_buf_size = 128 + 1;
 
 // Width and height of windows
 // Order of fields determines order of dragging collision check. MAKE SURE ITS IN SYNC WITH DRAWING CODE
 pub const window_bounds = struct {
+    pub const game: rl.Vector2 = .{.x = PPU.frame_buffer_width + 2, .y = PPU.frame_buffer_height + 24 + 1};
     pub const cpu_status: rl.Vector2 = .{.y = 176, .x = 376};
     pub const debugger: rl.Vector2 = .{.x = 320, .y = 504};
     pub var ptrn_tbl: rl.Vector2 = @import("windows/ptrn_tbl.zig").bounds(.default);
@@ -71,11 +73,13 @@ pub const GuiState = struct {
     cpu_status: @import("windows/cpu_status.zig") = .{},
     debugger: @import("windows/debugger.zig"),
     ptrn_tbl: @import("windows/ptrn_tbl.zig"),
+    game: @import("windows/game.zig"),
 
     pub fn init(alloc: std.mem.Allocator) !@This() {
         return .{
             .debugger = @import("windows/debugger.zig").init(alloc),
             .ptrn_tbl = try @import("windows/ptrn_tbl.zig").init(alloc),
+            .game = try @import("windows/game.zig").init(alloc),
         };
     }
 
@@ -83,12 +87,14 @@ pub const GuiState = struct {
     pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
         self.debugger.deinit(alloc);
         self.ptrn_tbl.deinit(alloc);
+        self.game.deinit(alloc);
     }
 };
 
 pub const MenuBarItem = enum {
     none,
     file,
+    game,
     debugger,
     cpu_status,
     ptrn_tbl,
@@ -108,25 +114,31 @@ pub fn menuBar(state: *GuiState) void {
     if (rg.guiButton(.{
         .x = 104, .y = 8,
         .width = 88, .height = 48
+    }, if (state.game.window_active) "> GAME" else "GAME") > 0) {
+        state.game.window_active = !state.game.window_active;
+    }
+    if (rg.guiButton(.{
+        .x = 200, .y = 8,
+        .width = 88, .height = 48
     }, if (state.debugger.window_active) "> DEBUGGER" else "DEBUGGER") > 0) {
         state.debugger.window_active = !state.debugger.window_active;
         state.debugger.dissasembly_regen = true;
     }
     if (rg.guiButton(.{
-        .x = 200, .y = 8,
+        .x = 296, .y = 8,
         .width = 88, .height = 48
     }, if (state.cpu_status.window_active) "> CPU STATUS" else "CPU STATUS") > 0) {
         state.cpu_status.window_active = !state.cpu_status.window_active;
         state.cpu_status.registers_update_flag = true;
     }
     if (rg.guiButton(.{
-        .x = 296, .y = 8,
+        .x = 392, .y = 8,
         .width = 88, .height = 48
     }, if (state.ptrn_tbl.window_active) "> PTRN TBL" else "PTRN TBL") > 0) {
         state.ptrn_tbl.window_active = !state.ptrn_tbl.window_active;
     }
     _ = rg.guiButton(.{
-        .x = 392, .y = 8,
+        .x = 488, .y = 8,
         .width = 88, .height = 48
     }, "MEMORY");
 }

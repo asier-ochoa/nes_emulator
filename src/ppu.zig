@@ -1,5 +1,19 @@
 const std = @import("std");
+const rl = @import("raylib");
 const Self = @This();
+
+// PPU registers
+// These are memory mapped
+// MAKE SURE THESE ARE ALWAYS AT THE TOP OF THE STRUCT!!
+ppu_control: u8 = 0,  // At 0x2000, Write only
+ppu_mask: u8 = 0,  // At 0x2001, Write only
+ppu_status: u8 = 3,  // At 0x2002, Read only
+oam_addr: u8 = 0,  // At 0x2003, Write only
+oam_data: u8 = 0,  // At 0x2004, Read/Write
+ppu_scroll: u8 = 0,  // At 0x2005, Write only, writing to this changes the W register to determine x or y
+ppu_addr: u8 = 0,  // At 0x2006, Write only, writing changes the W register
+ppu_data: u8 = 0,  // At 0x2007, Read/Write
+oam_dma: u8 = 0,  // Wierd address
 
 // Addresses 0000-1FFF
 // Bitplane format:
@@ -15,11 +29,36 @@ pattern_tables: [2][0x1000]u8,
 // Addresses 2000-2FFF
 name_tables: [4][0x400]u8,
 
+// Represents the final screen image
+frame_buffer: [frame_buffer_height * frame_buffer_width]u32 = .{0} ** (frame_buffer_height * frame_buffer_width),
+// Location of currently drawn pixel
+cur_column: u16 = 0,
+cur_scanline: u16 = 0,
+pub const frame_buffer_width = 256;
+pub const frame_buffer_height = 240;
+
 pub fn init() Self {
     return .{
         .pattern_tables = .{.{0} ** 0x1000} ** 2,
         .name_tables = .{.{0} ** 0x400} ** 4
     };
+}
+
+// One clock cycle paints one pixel
+pub fn tick(self: *Self) void {
+    // Fill with noise, one pixel at a time
+    self.frame_buffer[@as(usize, self.cur_scanline) * frame_buffer_width + @as(usize, self.cur_column)] = @as(u32, @intCast(rl.getRandomValue(0, 0xFFFFFF))) << 8 | 0x000000FF;
+    // self.frame_buffer[@as(usize, self.cur_scanline) * frame_buffer_width + @as(usize, self.cur_column)] = 0x00FF00FF;
+
+    // Advance currently drawn pixel
+    self.cur_column += 1;
+    if (self.cur_column >= frame_buffer_width) {
+        self.cur_column = 0;
+        self.cur_scanline += 1;
+    }
+    if (self.cur_scanline >= frame_buffer_height) {
+        self.cur_scanline = 0;
+    }
 }
 
 // Takes data for a single tile from the pattern table and decodes to 8x8 RGB array
@@ -38,6 +77,16 @@ pub fn decodePatternTile(tile: []const u8, palette: []const u32, decoded: []u32)
             decoded[(i - 8) * 8 + px] = palette[palette_idx];
         }
     }
+}
+
+pub fn getFieldFromAddr(self: *Self, address: u16) ?*u8 {
+    const address_from_base = address - 0x2000;
+    if (address_from_base < 0) return null;
+    // Iterate only through the ppu register fields
+    inline for (@typeInfo(Self).Struct.fields[0..8], 0..) |f, i| {
+        if (i == address_from_base) return &@field(self, f.name);
+    }
+    return null;
 }
 
 test "Pattern Tile decode" {

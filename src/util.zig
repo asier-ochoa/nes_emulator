@@ -23,14 +23,18 @@ pub const NesSystem = struct {
 
     pub fn init(alloc: std.mem.Allocator) !Self {
         const heap_bus = try alloc.create(NesBus);
-        heap_bus.* = NesBus.init();
-        return .{
+        var ret: Self = .{
             .alloc = alloc,
             .cpu = CPU.CPU(@TypeOf(heap_bus.*)).init(heap_bus),
             .ppu = PPU.init(),
             .bus = heap_bus,
             .debugger = debug.Debugger.init(alloc)
         };
+
+        ret.bus.memory_map.@"2000-3FFF".ppu = &ret.ppu;
+        // Set ram to 0
+        @memset(&ret.bus.memory_map.@"0000-07FF", 0);
+        return ret;
     }
 
     pub fn deinit(self: Self) void {
@@ -60,12 +64,17 @@ pub const NesSystem = struct {
     }
 
     // Ticks a single clock cycle
+    // PPU is base clock
+    // CPU is every 3 ticks
     pub fn tick(self: *Self) void {
         if (self.running) {
-            self.cpu.tick() catch {
-                std.debug.print("Last Instruction was at address {X:0<4}\n", .{self.last_instr_address});
-                @panic("Reached illegal instruction");
-            };
+            self.ppu.tick();
+            if (@mod(self.cycles_executed, 3) == 0) {
+                self.cpu.tick() catch {
+                    std.debug.print("Last Instruction was at address {X:0<4}\n", .{self.last_instr_address});
+                    @panic("Reached illegal instruction");
+                };
+            }
             self.cycles_executed += 1;
             // Count instruction when on fetch cycle
             if (self.cpu.current_instruction_cycle == 0) {
@@ -101,15 +110,21 @@ pub const NesBus = Bus.Bus(struct {
             mmap.@"0000-07FF"[@mod(address, 0x0800)] = data;
         }
     },
-    @"2000-3FFF": struct {  // PPU registers (8 bytes) + mirrors TODO: implement
+    @"2000-3FFF": struct {  // PPU registers (8 bytes) + mirrors
+        ppu: *PPU = undefined,
         const Self = @This();
-        pub fn onRead(_: *Self, _: u16, _: anytype) u8 {
-            return 0;
+        pub fn onRead(self: *Self, address: u16, _: anytype) u8 {
+            const inner_address = @mod(address, 8) + 0x2000;
+            return self.ppu.getFieldFromAddr(inner_address).?.*;
         }
-        pub fn onReadConst(_: Self, _: u16, _: anytype) u8 {
-            return 0;
+        pub fn onReadConst(self: Self, address: u16, _: anytype) u8 {
+            const inner_address = @mod(address, 8) + 0x2000;
+            return self.ppu.getFieldFromAddr(inner_address).?.*;
         }
-        pub fn onWrite(_: *Self, _: u16, _: u8, _: anytype) void {}
+        pub fn onWrite(self: *Self, address: u16, value: u8, _: anytype) void {
+            const inner_address = @mod(address, 8) + 0x2000;
+            self.ppu.getFieldFromAddr(inner_address).?.* = value;
+        }
     },
     @"4000-4017": struct {  // APU and I/O registers TODO: implement
         const Self = @This();

@@ -65,7 +65,7 @@ pub fn draw(self: *@This(), sys: *util.NesSystem, cycle_count: u64, instr_count:
         }
         _ = std.fmt.bufPrint(self.ir_text[0..2], "{X:0>2}", .{sys.cpu.instruction_register}) catch {};
         _ = std.fmt.bufPrint(self.cc_text[0..1], "{}", .{sys.cpu.current_instruction_cycle}) catch {};
-        _ = std.fmt.bufPrint(self.cycles_text[0..20], "{}", .{cycle_count}) catch {};
+        _ = std.fmt.bufPrint(self.cycles_text[0..20], "{}", .{@divTrunc(cycle_count, 3)}) catch {};
         _ = std.fmt.bufPrint(self.instr_text[0..20], "{}", .{instr_count}) catch {};
 
         // Main window

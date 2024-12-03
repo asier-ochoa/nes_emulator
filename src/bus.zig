@@ -1,5 +1,6 @@
 const std = @import("std");
 const util = @import("util.zig");
+const PPU = @import("ppu.zig");
 
 pub const logger = std.log.scoped(.Bus);
 
@@ -14,13 +15,22 @@ pub fn Bus(SuppliedMMap: type) type {
         // - A struct instance with a onRead, onWrite and onReadConst function
         //  - If the struct contains a "bus"
         // - A var array representing read and write memory
-        // The name of the member must denote the address range in the following format:
+        // The name of a member must denote the address range in the following format:
         //    @"XXXX[Lower bound in hex uppercase]-XXXX[Upper bound in hex uppercase]"
-        // TODO: Allow for struct instances to have init functions that initialize their internal state, if not present zero initialize
         pub const MemoryMap = CheckedMemoryMap(SuppliedMMap);
 
+        // Do not use this anymore unless not writing to map!!!!
         pub fn init() Self {
-            return std.mem.zeroes(Self);
+            if (@hasField(MemoryMap, "2000-3FFF")) {
+                return .{
+                    .memory_map = std.mem.zeroInit(MemoryMap, .{
+                        // BAD! causes segfault if dereferenced
+                        .@"2000-3FFF" = .{.ppu = @as(*PPU, @ptrFromInt(@alignOf(PPU) * 2))},
+                    }),
+                };
+            } else {
+                return std.mem.zeroes(Self);
+            }
         }
 
         pub fn cpuRead(self: *Self, address: u16) BusError!u8 {
