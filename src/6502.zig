@@ -316,7 +316,12 @@ pub fn CPU(Bus: type) type {
                         instr.BNErel.op, instr.BVSrel.op, instr.BVCrel.op,
                         instr.BPLrel.op, instr.BMIrel.op => {
                             if ((self.data_latch & 0x00FF) + (self.program_counter & 0x00FF) <= 0xFF) {
-                                self.program_counter +%= self.data_latch;
+                                // Check sign bit
+                                if (@as(u8, @intCast(self.data_latch)) & 0x80 == 0) {
+                                    self.program_counter +%= self.data_latch;
+                                } else {
+                                    self.program_counter -%= ~@as(u8, @intCast(self.data_latch)) + 1;
+                                }
                                 self.endInstruction();
                             }
                         },
@@ -480,7 +485,11 @@ pub fn CPU(Bus: type) type {
                         instr.BCSrel.op, instr.BCCrel.op, instr.BEQrel.op,
                         instr.BNErel.op, instr.BVSrel.op, instr.BVCrel.op,
                         instr.BPLrel.op, instr.BMIrel.op => {
-                            self.program_counter +%= self.data_latch;
+                            if (@as(u8, @intCast(self.data_latch)) & 0x80 == 0) {
+                                self.program_counter +%= self.data_latch;
+                            } else {
+                                self.program_counter -%= ~@as(u8, @intCast(self.data_latch)) + 1;
+                            }
                             self.endInstruction();
                         },
                         instr.PLA.op  => {
