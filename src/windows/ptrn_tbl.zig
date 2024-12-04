@@ -2,6 +2,7 @@ const std = @import("std");
 const rl = @import("raylib");
 const rg = @import("raygui");
 const util = @import("../util.zig");
+const PPU = @import("../ppu.zig");
 
 pub fn bounds(tag: enum {default, scaled, both, scaled_both}) rl.Vector2 {
     return ([_]rl.Vector2{
@@ -23,6 +24,8 @@ fb_textures: [2]rl.Texture,
 draw_grid: bool = false,
 three_scaling: bool = false,
 active_table_display: i32 = 0,
+palette_dropdown_active_idx: i32 = 0,
+palette_dropdown_edit: bool = false,
 
 pub fn init(alloc: std.mem.Allocator) !@This() {
     const fb: [2]rl.Image = .{
@@ -108,6 +111,7 @@ pub fn draw(self: *@This(), w_bounds: *rl.Vector2, sys: *const util.NesSystem) v
             .width = 24, .height = 24
         }, "SHOW GRID", &self.draw_grid);
 
+
         // 2X scaling checkbox
         _ = rg.guiCheckBox(.{
             .x = new_anchor.x, .y = new_anchor.y + 40,
@@ -115,10 +119,19 @@ pub fn draw(self: *@This(), w_bounds: *rl.Vector2, sys: *const util.NesSystem) v
         }, "3X SCALE", &self.three_scaling);
 
         // Choose which tbl to display
+        var null_active = self.active_table_display;
         _ = rg.guiToggleGroup(.{
             .x = new_anchor.x, .y = new_anchor.y + 72,
             .width = 88, .height = 24
-        }, "TBL0;TBL1;BOTH", &self.active_table_display);
+        }, "TBL0;TBL1;BOTH", if (self.palette_dropdown_edit) &null_active else &self.active_table_display);
+
+        // Palette dropdown
+        if (rg.guiDropdownBox(.{
+            .x = new_anchor.x + 96, .y = new_anchor.y + 8,
+            .width = 120, .height = 24
+        }, "Ptrn 0;Ptrn 1;Ptrn 2;Ptrn 3;Sprt 0;Sprt 1;Sprt 2;Sprt 3", &self.palette_dropdown_active_idx, self.palette_dropdown_edit) > 0) {
+            self.palette_dropdown_edit = !self.palette_dropdown_edit;
+        }
 
         update_framebuffer(self, sys, self.draw_grid);
 
@@ -148,20 +161,19 @@ pub fn draw(self: *@This(), w_bounds: *rl.Vector2, sys: *const util.NesSystem) v
 // - Conditionally draws a grid
 const grid_color = std.mem.nativeToBig(u32, 0xE50A7BFF);
 pub fn update_framebuffer(self: *@This(), sys: *const util.NesSystem, draw_grid: bool) void {
-    const tmp_color_palette = .{
-        std.mem.nativeToBig(u32, 0x000000FF),
-        std.mem.nativeToBig(u32, 0xFF0000FF),
-        std.mem.nativeToBig(u32, 0x0000FFFF),
-        std.mem.nativeToBig(u32, 0xFFFFFFFF),
+    const rgba_color_palette = .{
+        std.mem.nativeToBig(u32, PPU.getNtscPaletteColor(sys.ppu.palette_ram[@intCast(@mod(self.palette_dropdown_active_idx, 4) * 4)])),  // Background color
+        std.mem.nativeToBig(u32, PPU.getNtscPaletteColor(sys.ppu.palette_ram[@intCast(self.palette_dropdown_active_idx * 4 + 1)])),
+        std.mem.nativeToBig(u32, PPU.getNtscPaletteColor(sys.ppu.palette_ram[@intCast(self.palette_dropdown_active_idx * 4 + 2)])),
+        std.mem.nativeToBig(u32, PPU.getNtscPaletteColor(sys.ppu.palette_ram[@intCast(self.palette_dropdown_active_idx * 4 + 3)])),
     };
 
-    // self.framebuffer.clearBackground(rl.Color.pink);
     for (&self.framebuffers, 0..) |*fb, idx| {
         const tbl: []const u8 = &sys.ppu.pattern_tables[idx];
         for (0..@divTrunc(tbl.len, 16)) |i| {
             // Draw to simple 1D buffer
             var decoded: [8 * 8]u32 = .{0} ** (8 * 8);
-            @TypeOf(sys.ppu).decodePatternTile(tbl[i * 16..(i + 1) * 16], &tmp_color_palette, &decoded);
+            @TypeOf(sys.ppu).decodePatternTile(tbl[i * 16..(i + 1) * 16], &rgba_color_palette, &decoded);
 
             // Insert vertical and horizontal line
             if (draw_grid) {

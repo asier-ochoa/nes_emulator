@@ -20,9 +20,8 @@ pub fn main() !void {
 
     // Initialize emulation system
     var sys = try util.NesSystem.init(alloc);
+    sys.bus.memory_map.@"2000-3FFF".ppu = &sys.ppu;
     defer sys.deinit();
-    sys.cpu.program_counter = 0xC000;
-    sys.cpu.stack_pointer = 0xFD;
 
     // Initialize window
     rl.initWindow(1280, 720, "NES Emulator");
@@ -33,6 +32,10 @@ pub fn main() !void {
     // Initialize GUI state
     var state = try gui.GuiState.init(alloc);
     defer state.deinit(alloc);
+
+    // Variables used for performance counters
+    var last_cycle_count: u64 = 0;
+    var last_cpu_cycle_count: u64 = 0;
 
     // Initialize debugger but don't attach
     // var debugger = debug.Debugger.init(alloc);
@@ -46,12 +49,19 @@ pub fn main() !void {
     _ = try file.readAll(file_data);
     rom_loader.load_ines_into_bus(file_data, &sys);
 
+    var text_buffer: [256]u8 = .{0} ** 256;
     while (!rl.windowShouldClose()) {
         // Update system state
         sys.running = state.cpu_status.cpu_running;
 
         // Run CPU
-        sys.runAt(60);
+        sys.runAt(1_789_773 * 3);
+        // sys.runFullSpeedFor(std.time.milliTimestamp(), @intFromFloat(rl.getFrameTime() * 0.96 * 1000));
+        // sys.runAt(4000);
+
+        // Compute emulator frequency
+        const freq = (sys.cycles_executed - last_cycle_count) * @as(u32, @intCast(rl.getFPS()));
+        const cpu_freq = (sys.cpu_cycles_executed - last_cpu_cycle_count) * @as(u32, @intCast(rl.getFPS()));
 
         gui.windowDraggingLogic(&state);
 
@@ -60,14 +70,21 @@ pub fn main() !void {
             defer rl.endDrawing();
             rl.clearBackground(rl.Color.dark_blue);
 
+            // Draw perf counters
+            @memset(&text_buffer, 0);
+            rl.drawText(@ptrCast(try std.fmt.bufPrint(&text_buffer, "System: {} hz", .{freq})), 0, 65, 20, rl.Color.black);
+            @memset(&text_buffer, 0);
+            rl.drawText(@ptrCast(try std.fmt.bufPrint(&text_buffer, "CPU: {} hz", .{cpu_freq})), 0, 85, 20, rl.Color.black);
             {  // Ui Drawing scope
                 gui.menuBar(&state);
                 state.ptrn_tbl.draw(&gui.window_bounds.ptrn_tbl, &sys);
                 state.debugger.draw(&state.cpu_status, &sys, alloc);
-                state.cpu_status.draw(&sys, sys.cycles_executed, sys.instructions_executed);
-
-                rl.drawFPS(0, 60);
+                state.cpu_status.draw(&sys, sys.cpu_cycles_executed, sys.instructions_executed);
+                state.game.draw(&sys);
             }
         }
+
+        last_cycle_count = sys.cycles_executed;
+        last_cpu_cycle_count = sys.cpu_cycles_executed;
     }
 }

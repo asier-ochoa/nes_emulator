@@ -5,7 +5,8 @@ pub fn build(b: *std.Build) void {
     const emulator_exe = b.addExecutable(.{
         .name = "nes_emulator",
         .root_source_file = b.path("src/main.zig"),
-        .target = b.host
+        .target = b.host,
+        .optimize = b.standardOptimizeOption(.{}),
     });
     const install_exe = b.addInstallArtifact(emulator_exe, .{
         .dest_dir = .{ .override = .{ .custom = "./" } }

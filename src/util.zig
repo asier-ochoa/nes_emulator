@@ -16,6 +16,7 @@ pub const NesSystem = struct {
     debugger: debug.Debugger,
 
     cycles_executed: usize = 0,
+    cpu_cycles_executed: usize = 0,
     instructions_executed: usize = 0,
     last_instr_address: u16 = 0,
 
@@ -23,6 +24,7 @@ pub const NesSystem = struct {
 
     pub fn init(alloc: std.mem.Allocator) !Self {
         const heap_bus = try alloc.create(NesBus);
+
         var ret: Self = .{
             .alloc = alloc,
             .cpu = CPU.CPU(@TypeOf(heap_bus.*)).init(heap_bus),
@@ -31,7 +33,6 @@ pub const NesSystem = struct {
             .debugger = debug.Debugger.init(alloc)
         };
 
-        ret.bus.memory_map.@"2000-3FFF".ppu = &ret.ppu;
         // Set ram to 0
         @memset(&ret.bus.memory_map.@"0000-07FF", 0);
         return ret;
@@ -63,7 +64,7 @@ pub const NesSystem = struct {
         }
     }
 
-    // Ticks a single clock cycle
+    // Tick a single clock cycle
     // PPU is base clock
     // CPU is every 3 ticks
     pub fn tick(self: *Self) void {
@@ -74,18 +75,29 @@ pub const NesSystem = struct {
                     std.debug.print("Last Instruction was at address {X:0<4}\n", .{self.last_instr_address});
                     @panic("Reached illegal instruction");
                 };
+                // Count instruction when on fetch cycle
+                if (self.cpu.current_instruction_cycle == 0) {
+                    self.instructions_executed +%= 1;
+                    self.last_instr_address = self.cpu.program_counter;
+                }
+                self.cpu_cycles_executed +%= 1;
             }
-            self.cycles_executed += 1;
-            // Count instruction when on fetch cycle
-            if (self.cpu.current_instruction_cycle == 0) {
-                self.instructions_executed += 1;
-                self.last_instr_address = self.cpu.program_counter;
-            }
+            self.cycles_executed +%= 1;
         }
     }
 
-    pub fn tickInstruction() void {
-
+    pub fn tickInstruction(self: *Self) void {
+        if (self.running) {
+            if (self.cpu.current_instruction_cycle == 0) {
+                const start_cpu_cycle = self.cpu_cycles_executed;
+                while (self.cpu_cycles_executed == start_cpu_cycle) {
+                    self.tick();
+                }
+            }
+            while (self.cpu.current_instruction_cycle != 0) {
+                self.tick();
+            }
+        }
     }
 };
 
@@ -115,15 +127,15 @@ pub const NesBus = Bus.Bus(struct {
         const Self = @This();
         pub fn onRead(self: *Self, address: u16, _: anytype) u8 {
             const inner_address = @mod(address, 8) + 0x2000;
-            return self.ppu.getFieldFromAddr(inner_address).?.*;
+            return self.ppu.ppu_read(inner_address, false);
         }
         pub fn onReadConst(self: Self, address: u16, _: anytype) u8 {
             const inner_address = @mod(address, 8) + 0x2000;
-            return self.ppu.getFieldFromAddr(inner_address).?.*;
+            return self.ppu.ppu_read(inner_address, true);
         }
         pub fn onWrite(self: *Self, address: u16, value: u8, _: anytype) void {
             const inner_address = @mod(address, 8) + 0x2000;
-            self.ppu.getFieldFromAddr(inner_address).?.* = value;
+            self.ppu.ppu_write(value, inner_address);
         }
     },
     @"4000-4017": struct {  // APU and I/O registers TODO: implement
