@@ -30,9 +30,9 @@ pub fn CPU(Bus: type) type {
 
         // External physical state
         // False is low, true is high
-        irq_line: bool = false,
-        nmi_line: bool = false,
-        reset_line: bool = false,
+        irq_latch: bool = false,
+        nmi_latch: bool = false,
+        reset_latch: bool = false,
 
         // Internal logical state
         // Starting at 1 helps with initializing the cpu since the IR holds 0 at the start which
@@ -65,15 +65,18 @@ pub fn CPU(Bus: type) type {
         fn fetchInstruction(self: *Self) void {
             // Check for interrupts here
             // Don't increment program counter on hardware interrupt
-            if (self.reset_line) {
+            if (self.reset_latch) {
                 self.instruction_register = instr.BRK.op;
                 self.interrupt_type = .Reset;
-            } else if (self.nmi_line) {
+                self.reset_latch = false;
+            } else if (self.nmi_latch) {
                 self.instruction_register = instr.BRK.op;
                 self.interrupt_type = .NMI;
-            } else if (self.irq_line and !self.isFlagSet(.irq_disable)) {
+                self.nmi_latch = false;
+            } else if (self.irq_latch and !self.isFlagSet(.irq_disable)) {
                 self.instruction_register = instr.BRK.op;
                 self.interrupt_type = .IRQ;
+                self.irq_latch = false;
             } else {
                 self.instruction_register = self.safeBusRead(self.program_counter);
                 self.program_counter += 1;
@@ -131,7 +134,10 @@ pub fn CPU(Bus: type) type {
                         instr.LSRabsX.op, instr.INCabsX.op, instr.DECabsX.op,
                         instr.BRK.op => |instruction| {
                             self.data_latch = self.safeBusRead(self.program_counter);
-                            self.program_counter += 1;
+                            // If I increment this, the PC counter will be off by one when stored in the stack
+                            if (instruction != instr.BRK.op) {
+                                self.program_counter += 1;
+                            }
 
                             // End when branching instruction conditions are false
                             if (instruction == instr.BCSrel.op and !self.isFlagSet(.carry)) self.endInstruction();
