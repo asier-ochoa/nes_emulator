@@ -13,6 +13,7 @@ pub fn load_ines_into_bus(data: []const u8, sys: *util.NesSystem) void {
         \\  - Mapper ID: {}
         \\  - PRG Banks: {} | Size: {} bytes
         \\  - CHR Banks: {} | Size: {} bytes | Starts at: 0x{X:0>4}
+        \\  - Mirroring type: {c}
         \\
         , .{
             mapper,
@@ -21,6 +22,7 @@ pub fn load_ines_into_bus(data: []const u8, sys: *util.NesSystem) void {
             @divTrunc(chr_size, 8192),
             chr_size,
             16 + prg_size + sys.ppu.pattern_tables[0].len,
+            @as(u8 , if (header[6] & 1 != 0) 'v' else 'h'),
         },
     );
 
@@ -35,4 +37,6 @@ pub fn load_ines_into_bus(data: []const u8, sys: *util.NesSystem) void {
     std.mem.copyForwards(u8, &sys.ppu.pattern_tables[0], data[16 + prg_size..16 + prg_size + sys.ppu.pattern_tables[0].len]);
     std.mem.copyForwards(u8, &sys.ppu.pattern_tables[1], data[16 + prg_size + sys.ppu.pattern_tables[0].len..16 + prg_size + sys.ppu.pattern_tables[1].len * 2]);
 
+    // Set mirroring type
+    sys.ppu.nametable_mirroring = if (header[6] & 1 != 0) .v else .h;
 }
