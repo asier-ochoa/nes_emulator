@@ -2,6 +2,7 @@ const std = @import("std");
 const rl = @import("raylib");
 const Self = @This();
 const builtin = @import("builtin");
+const util = @import("util.zig");
 
 // PPU registers
 // These are memory mapped
@@ -20,6 +21,8 @@ oam_dma: u8 = 0,  // Wierd address
 // Indicates if low or high byte is being read
 address_latch: u8 = 0,
 ppu_data_buffer: u8 = 0,
+
+
 
 // Addresses 0000-1FFF
 // Bitplane format:
@@ -41,9 +44,11 @@ palette_ram: [32]u8,
 frame_buffer: [frame_buffer_height * frame_buffer_width]u32 = .{0} ** (frame_buffer_height * frame_buffer_width),
 // Location of currently drawn pixel
 cur_column: u16 = 0,
-cur_scanline: u16 = 0,
+cur_scanline: i16 = 0,
 pub const frame_buffer_width = 256;
 pub const frame_buffer_height = 240;
+pub const PPU_scanlines = 261;
+pub const PPU_columns = 341;
 
 pub fn init() Self {
     return .{
@@ -54,18 +59,54 @@ pub fn init() Self {
 }
 
 // One clock cycle paints one pixel
-pub fn tick(self: *Self) void {
+pub fn tick(self: *Self, cpu: *util.NesCpu) void {
+    // Reset vblanking state when at top left of screen
+    if (self.cur_scanline == -1 and self.cur_column == 1) {
+        // Set vblank to false
+        self.ppu_status &= ~PPUSTAT.get(.vblank) ;
+    }
+
+    // Send NMI to cpu (Rendering done)
+    if (self.cur_scanline == 241 and self.cur_column == 1) {
+        // Set vblank to true
+        self.ppu_status |= PPUSTAT.get(.vblank);
+        if (self.ppu_control & PPUCTRL.get(.vblank_nmi) > 0) {
+            cpu.nmi_latch = true;
+        }
+    }
+
     // Fill with noise, one pixel at a time
-    self.frame_buffer[@as(usize, self.cur_scanline) * frame_buffer_width + @as(usize, self.cur_column)] = @as(u32, @intCast(rl.getRandomValue(0, 0xFFFFFF))) << 8 | 0x000000FF;
+    // if (self.cur_scanline >= 0 and self.cur_scanline < frame_buffer_height and self.cur_column < frame_buffer_width) {
+    //     self.frame_buffer[@as(usize, @intCast(self.cur_scanline)) * frame_buffer_width + @as(usize, self.cur_column)] = @as(u32, @intCast(rl.getRandomValue(0, 0xFFFFFF))) << 8 | 0x000000FF;
+    // }
+
+    // Drawing logic (debug logic)
+    if (self.cur_column < frame_buffer_width and self.cur_scanline >= 0 and self.cur_scanline < frame_buffer_height) {
+        const scanline: u16 = @intCast(self.cur_scanline);
+        var pattern = [_]u32{0} ** (8 * 8);
+        const nametable_idx = @divTrunc(self.cur_column, 8) + @divTrunc(scanline, 8) * 32;
+        decodePatternTile(
+            self.pattern_tables[0][@as(usize, self.name_tables[0][nametable_idx]) * 16..@as(usize, self.name_tables[0][nametable_idx]) * 16 + 16],
+            &.{
+                std.mem.nativeToLittle(u32, getNtscPaletteColor(self.palette_ram[0])),
+                std.mem.nativeToLittle(u32, getNtscPaletteColor(self.palette_ram[1])),
+                std.mem.nativeToLittle(u32, getNtscPaletteColor(self.palette_ram[2])),
+                std.mem.nativeToLittle(u32, getNtscPaletteColor(self.palette_ram[3])),
+            },
+            &pattern,
+        );
+        // std.debug.print("pattern: {any}\n", .{pattern});
+        self.frame_buffer[scanline * frame_buffer_width + self.cur_column] = pattern[@mod(self.cur_column, 8) + @mod(scanline, 8) * 8];
+    }
 
     // Advance currently drawn pixel
     self.cur_column += 1;
-    if (self.cur_column >= frame_buffer_width) {
+    if (self.cur_column >= PPU_columns) {
         self.cur_column = 0;
         self.cur_scanline += 1;
     }
-    if (self.cur_scanline >= frame_buffer_height) {
-        self.cur_scanline = 0;
+    if (self.cur_scanline >= PPU_scanlines) {
+        self.cur_scanline = -1;
     }
 }
 
@@ -83,6 +124,7 @@ const PpuControlRegisterFlags = enum(u8) {
         return @intFromEnum(self);
     }
 };
+pub const PPUCTRL = PpuControlRegisterFlags;
 
 const PpuMaskRegisterFlags = enum(u8) {
     emphasis_b = 1 << 7,
@@ -179,7 +221,7 @@ pub fn ppu_write(self: *Self, data: u8, address: u16) void {
             self.ppu_data = data;
             self.memory_write(self.ppu_addr, self.ppu_data);
             // NES autoincrements the address
-            self.ppu_addr +%= 1;
+            self.ppu_addr +%= if (self.ppu_control & PPUCTRL.get(.vram_addr_increment) == 0) 1 else 32;
         },
         else => @panic("Unknown ppu write!"),
     }
@@ -195,9 +237,7 @@ pub fn ppu_read(self: *Self, address: u16, comptime debug_read: bool) u8 {
             // PPU Status
             2 => {
                 // First 3 bits are filled with status register, rest is sourced from data register
-                data = self.ppu_status & 0xE0 | self.ppu_data & 0x1F;
-                // TODO: Remove this hack for always returning vblank = 1
-                data |= PPUSTAT.vblank.get();
+                data = (self.ppu_status & 0xE0) | (self.ppu_data & 0x1F);
 
                 // Reset data latch
                 self.address_latch = 0;
@@ -216,7 +256,7 @@ pub fn ppu_read(self: *Self, address: u16, comptime debug_read: bool) u8 {
                 if (self.ppu_addr >= 0x3f00) data = self.ppu_data_buffer;
 
                 // NES autoincrements the address
-                self.ppu_addr +%= 1;
+                self.ppu_addr +%= if (self.ppu_control & PPUCTRL.get(.vram_addr_increment) == 0) 1 else 32;
             },
             else => {@panic("Unknown field!");},
         }
@@ -231,6 +271,14 @@ fn memory_read(self: *Self, address: u16) u8 {
     // Pattern memory
     if (addr <= 0x1FFF) {
         return self.pattern_tables[(addr & 0x1000) >> 12][addr & 0x0FFF];
+    // Nametable memory
+    } else if (addr >= 0x2000 and addr <= 0x2FFF) {
+        addr &= 0x0FFF;
+        // Horizontal Mirroring TODO: Add vertical mirroring
+        if (addr >= 0x0000 and addr <= 0x03FF) return self.name_tables[0][addr & 0x03FF];
+        if (addr >= 0x0400 and addr <= 0x07FF) return self.name_tables[0][addr & 0x03FF];
+        if (addr >= 0x0800 and addr <= 0x0BFF) return self.name_tables[0][addr & 0x03FF];
+        if (addr >= 0x0C00 and addr <= 0x0FFF) return self.name_tables[0][addr & 0x03FF];
     // Palette ram
     } else if (addr >= 0x3F00 and addr <= 0x3FFF) {
         // Only need 5 bits to access 32 long array
@@ -252,6 +300,14 @@ fn memory_write(self: *Self, address: u16, data: u8) void {
     // Pattern memory
     if (addr <= 0x1FFF) {
         self.pattern_tables[(addr & 0x1000) >> 12][addr & 0x0FFF] = data;
+    // Name table memory
+    } else if (addr >= 0x2000 and addr <= 0x2FFF) {
+        addr &= 0x0FFF;
+        // Horizontal Mirroring
+        if (addr >= 0x0000 and addr <= 0x03FF) self.name_tables[0][addr & 0x03FF] = data;
+        if (addr >= 0x0400 and addr <= 0x07FF) self.name_tables[0][addr & 0x03FF] = data;
+        if (addr >= 0x0800 and addr <= 0x0BFF) self.name_tables[1][addr & 0x03FF] = data;
+        if (addr >= 0x0C00 and addr <= 0x0FFF) self.name_tables[1][addr & 0x03FF] = data;
     // Palette ram
     } else if (addr >= 0x3F00 and addr <= 0x3FFF) {
         // Only need 5 bits to access 32 long array

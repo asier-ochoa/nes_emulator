@@ -59,9 +59,9 @@ pub fn draw(self: *@This(), sys: *util.NesSystem, cycle_count: u64, instr_count:
             self.c_flag = sys.cpu.isFlagSet(.carry);
 
             // Interrupts
-            self.reset_interrupt_flag = sys.cpu.reset_line;
-            self.irq_interrupt_flag = sys.cpu.irq_line;
-            self.nmi_interrupt_flag = sys.cpu.nmi_line;
+            self.reset_interrupt_flag = sys.cpu.reset_latch;
+            self.irq_interrupt_flag = sys.cpu.irq_latch;
+            self.nmi_interrupt_flag = sys.cpu.nmi_latch;
         }
         _ = std.fmt.bufPrint(self.ir_text[0..2], "{X:0>2}", .{sys.cpu.instruction_register}) catch {};
         _ = std.fmt.bufPrint(self.cc_text[0..1], "{}", .{sys.cpu.current_instruction_cycle}) catch {};
@@ -156,21 +156,21 @@ fn interrupts(self: *@This(), pos: rl.Vector2, sys: *util.NesSystem) void {
         .x = anchor.x + 8, .y = anchor.y + 8,
         .width = 24, .height = 24,
     }, "RESET", &self.reset_interrupt_flag) > 0) {
-        self.setValueInCpu(self.reset_interrupt_flag, &sys.cpu.reset_line);
+        self.setValueInCpu(self.reset_interrupt_flag, &sys.cpu.reset_latch);
     }
 
     if (rg.guiCheckBox(.{
         .x = anchor.x + 80, .y = anchor.y + 8,
         .width = 24, .height = 24,
     }, "IRQ", &self.irq_interrupt_flag) > 0) {
-        self.setValueInCpu(self.irq_interrupt_flag, &sys.cpu.irq_line);
+        self.setValueInCpu(self.irq_interrupt_flag, &sys.cpu.irq_latch);
     }
 
     if (rg.guiCheckBox(.{
         .x = anchor.x + 136, .y = anchor.y + 8,
         .width = 24, .height = 24,
     }, "NMI", &self.nmi_interrupt_flag) > 0) {
-        self.setValueInCpu(self.nmi_interrupt_flag, &sys.cpu.nmi_line);
+        self.setValueInCpu(self.nmi_interrupt_flag, &sys.cpu.nmi_latch);
     }
 }
 

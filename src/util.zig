@@ -5,12 +5,14 @@ const debug = @import("debugger.zig");
 const rl = @import("raylib");
 const PPU = @import("ppu.zig");
 
+pub const NesCpu = CPU.CPU(NesBus);
+
 pub const NesSystem = struct {
     const Self = @This();
 
     alloc: std.mem.Allocator,
 
-    cpu: CPU.CPU(NesBus),
+    cpu: NesCpu,
     bus: *NesBus,  // Have to do this because of circular dependencies and such
     ppu: PPU,
     debugger: debug.Debugger,
@@ -69,7 +71,7 @@ pub const NesSystem = struct {
     // CPU is every 3 ticks
     pub fn tick(self: *Self) void {
         if (self.running) {
-            self.ppu.tick();
+            self.ppu.tick(&self.cpu);
             if (@mod(self.cycles_executed, 3) == 0) {
                 self.cpu.tick() catch {
                     std.debug.print("Last Instruction was at address {X:0<4}\n", .{self.last_instr_address});
@@ -140,13 +142,37 @@ pub const NesBus = Bus.Bus(struct {
     },
     @"4000-4017": struct {  // APU and I/O registers TODO: implement
         const Self = @This();
-        pub fn onRead(_: *Self, _: u16, _: anytype) u8 {
+        controller_register_num: u8 = 0,  // Used to cycle which button to report back
+        pub fn onRead(self: *Self, address: u16, _: anytype) u8 {
+            // Controller 1 line
+            if (address == 0x4016) {
+                const ret: u8 = switch (self.controller_register_num) {
+                    // NES A button
+                    0 => if (rl.isKeyDown(.key_q)) 1 else 0,
+                    1 => if (rl.isKeyDown(.key_w)) 1 else 0,
+                    2 => if (rl.isKeyDown(.key_backslash)) 1 else 0,
+                    3 => if (rl.isKeyDown(.key_enter)) 1 else 0,
+                    4 => if (rl.isKeyDown(.key_up)) 1 else 0,
+                    5 => if (rl.isKeyDown(.key_down)) 1 else 0,
+                    6 => if (rl.isKeyDown(.key_left)) 1 else 0,
+                    7 => if (rl.isKeyDown(.key_right)) 1 else 0,
+                    else => 1,
+                };
+                self.controller_register_num +|= 1;
+                return ret;
+            }
             return 0;
         }
         pub fn onReadConst(_: Self, _: u16, _: anytype) u8 {
             return 0;
         }
-        pub fn onWrite(_: *Self, _: u16, _: u8, _: anytype) void {}
+        pub fn onWrite(self: *Self, address: u16, data: u8, _: anytype) void {
+            // Controller 1 line
+            if (address == 0x4016) {
+                // Reset controller read when bit 0 is high
+                if (data & 1 != 0) self.controller_register_num = 0;
+            }
+        }
     },
     @"4018-401F": struct {  // Unused unless test
         const Self = @This();

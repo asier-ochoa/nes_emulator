@@ -24,8 +24,10 @@ pub fn main() !void {
     defer sys.deinit();
 
     // Initialize window
+    rl.setConfigFlags(.{.window_resizable = true});
     rl.initWindow(1280, 720, "NES Emulator");
     defer rl.closeWindow();
+    rl.setWindowMinSize(800, 600);
     rl.setTargetFPS(rl.getMonitorRefreshRate(0));
     rg.guiLoadStyle("./dark.rgs");
 
@@ -56,8 +58,8 @@ pub fn main() !void {
 
         // Run CPU
         sys.runAt(1_789_773 * 3);
-        // sys.runFullSpeedFor(std.time.milliTimestamp(), @intFromFloat(rl.getFrameTime() * 0.96 * 1000));
-        // sys.runAt(4000);
+        // sys.runFullSpeedFor(std.time.milliTimestamp(), @intFromFloat(rl.getFrameTime() * 0.90 * 1000));
+        // sys.runAt(50000);
 
         // Compute emulator frequency
         const freq = (sys.cycles_executed - last_cycle_count) * @as(u32, @intCast(rl.getFPS()));
