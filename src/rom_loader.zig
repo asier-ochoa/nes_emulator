@@ -34,8 +34,10 @@ pub fn load_ines_into_bus(data: []const u8, sys: *util.NesSystem) void {
     }
 
     // Copy chr to ppu mem
-    std.mem.copyForwards(u8, &sys.ppu.pattern_tables[0], data[16 + prg_size..16 + prg_size + sys.ppu.pattern_tables[0].len]);
-    std.mem.copyForwards(u8, &sys.ppu.pattern_tables[1], data[16 + prg_size + sys.ppu.pattern_tables[0].len..16 + prg_size + sys.ppu.pattern_tables[1].len * 2]);
+    if (chr_size > 0) {
+        std.mem.copyForwards(u8, &sys.ppu.pattern_tables[0], data[16 + prg_size..16 + prg_size + sys.ppu.pattern_tables[0].len]);
+        std.mem.copyForwards(u8, &sys.ppu.pattern_tables[1], data[16 + prg_size + sys.ppu.pattern_tables[0].len..16 + prg_size + sys.ppu.pattern_tables[1].len * 2]);
+    }
 
     // Set mirroring type
     sys.ppu.nametable_mirroring = if (header[6] & 1 != 0) .v else .h;

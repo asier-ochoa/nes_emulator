@@ -15,7 +15,7 @@ oam_data: u8 = 0,  // At 0x2004, Read/Write
 ppu_scroll: u16 = 0,  // At 0x2005, Write only, writing to this changes the W register to determine x or y
 ppu_addr: Loopy = @enumFromInt(0),  // At 0x2006, Write only, writing changes the W register, ALSO KNOWN AS LOOPY VRAM ADDRESS
 ppu_data: u8 = 0,  // At 0x2007, Read/Write
-oam_dma: u8 = 0,  // Wierd address
+oam_dma: u8 = 0,  // Wierd address, 0x4014
 
 // Internal PPU state
 // Indicates if low or high byte is being read
@@ -24,17 +24,28 @@ ppu_data_buffer: u8 = 0,
 tram_addr: Loopy = @enumFromInt(0),  // Second loopy register
 fine_x: u8 = 0,
 
+// Used as a flag signal to the system that a OAM DMA has been requested
+// The tick function of the PPU does the DMA signaling to the system
+dma_write_requested: bool = false,
+dma_page: u8 = 0,
+
 // Nametable prefetching variables
 next_ptrn_idx: u8 = 0,  // Indexes into pattern table
 next_ptrn_attr: u8 = 0,
 next_ptrn_lsb: u8 = 0,  // These 2 bitplanes are used to render 8 pixels at 2 bits per pixel
 next_ptrn_msb: u8 = 0,
 
-// Shift registers used in final drawing
+// Shift registers used in background drawing
 shifter_ptrn_lsb: u16 = 0,
 shifter_ptrn_msb: u16 = 0,
 shifter_attr_lsb: u16 = 0,
 shifter_attr_msb: u16 = 0,
+
+// Sprite drawing state
+scanline_sprites: [8]OAM = .{.{}} ** 8,  // Used to store all sprites to be drawn in this scanline
+sprites_count: u8 = 0,
+sprite_shifter_ptrn_lsb: [8]u8 = .{0} ** 8,
+sprite_shifter_ptrn_msb: [8]u8 = .{0} ** 8,
 
 // Addresses 0000-1FFF
 // Bitplane format:
@@ -51,6 +62,8 @@ pattern_tables: [2][0x1000]u8,
 name_tables: [4][0x400]u8,
 // Addresses 3F00-3F1F,
 palette_ram: [32]u8,
+// OAM, unmapped
+object_attribute_memory: [64]OAM,
 
 nametable_mirroring: enum {h, v},
 
@@ -64,22 +77,47 @@ pub const frame_buffer_height = 240;
 pub const PPU_scanlines = 261;
 pub const PPU_columns = 341;
 
+const OAM = packed struct {
+    y: u8 = 0,
+    id: u8 = 0,  // Pattern table index
+    attr: u8 = 0,
+    x: u8 = 0,
+};
+pub fn getOAMSlice(_: *Self, slice: []OAM) []u8 {
+    const type_erased: *anyopaque = @ptrCast(slice);
+    const ptr_to_many: [*]u8 = @ptrCast(@alignCast(type_erased));
+    return @ptrCast(ptr_to_many[0..slice.len * 4]);
+}
+
 pub fn init() Self {
     return .{
         .pattern_tables = .{.{0} ** 0x1000} ** 2,
         .name_tables = .{.{0} ** 0x400} ** 4,
         .palette_ram = .{0} ** 32,
+        .object_attribute_memory = .{.{}} ** 64,
         .nametable_mirroring = .h,
     };
 }
 
 // One clock cycle paints one pixel
-pub fn tick(self: *Self, cpu: *util.NesCpu) void {
+pub fn tick(self: *Self, sys: *util.NesSystem) void {
+    // Trigger DMA
+    // Basically nulls this cycle
+    if (self.dma_write_requested) {
+        self.dma_write_requested = false;
+        sys.startDMA(self.dma_page);
+        return;
+    }
 
     // Reset vblanking state when at top left of screen
     if (self.cur_scanline == -1 and self.cur_column == 1) {
         // Set vblank to false
-        self.ppu_status &= ~PPUSTAT.get(.vblank) ;
+        self.ppu_status &= ~PPUSTAT.get(.vblank);
+        // Set sprite overflow to false
+        self.ppu_status &= ~PPUSTAT.get(.sprite_overflow);
+        // Reset shifter
+        @memset(&self.sprite_shifter_ptrn_lsb, 0);
+        @memset(&self.sprite_shifter_ptrn_msb, 0);
     }
 
     // Send NMI to cpu (Rendering done)
@@ -87,7 +125,7 @@ pub fn tick(self: *Self, cpu: *util.NesCpu) void {
         // Set vblank to true
         self.ppu_status |= PPUSTAT.get(.vblank);
         if (self.ppu_control & PPUCTRL.get(.vblank_nmi) > 0) {
-            cpu.nmi_latch = true;
+            sys.cpu.nmi_latch = true;
         }
     }
 
@@ -129,28 +167,153 @@ pub fn tick(self: *Self, cpu: *util.NesCpu) void {
             self.transferX();
         }
 
+        if (self.cur_column == 338 or self.cur_column == 340) {
+            self.next_ptrn_idx = self.memory_read(0x2000 | (self.ppu_addr.get() & 0x0FFF));
+        }
+
         if (self.cur_scanline == -1 and self.cur_column >= 280 and self.cur_column < 305) self.transferY();
 
         // Select pixel color to draw with if background drawing is enabled
-        var pixel: u8 = 0;  // 2 bit color
-        var palette: u8 = 0;  // 3 bit palette
+        var background_pixel: u8 = 0;  // 2 bit color
+        var background_palette: u8 = 0;  // 3 bit palette
         if (self.ppu_mask & PPUMASK.enable_background.get() != 0) {
             // Scroll the bit with fine_x
             const bit_mux: u16 = @as(u16, 0x8000) >> @intCast(self.fine_x);
             // Which bitplane is selected
             const bit_plane0 = @intFromBool((self.shifter_ptrn_lsb & bit_mux) > 0);
             const bit_plane1 = @intFromBool((self.shifter_ptrn_msb & bit_mux) > 0);
-            pixel = @as(u8, bit_plane1) << 1 | bit_plane0;
+            background_pixel = (@as(u8, bit_plane1) << 1) | bit_plane0;
 
             const palette0 = @intFromBool((self.shifter_attr_lsb & bit_mux) > 0);
             const palette1 = @intFromBool((self.shifter_attr_msb & bit_mux) > 0);
-            palette = @as(u8, palette1) << 1 | palette0;
+            background_palette = (@as(u8, palette1) << 1) | palette0;
         }
+
+        // Sprite rendering logic
+        // Start loading sprites for scanline after visible region
+        if (self.cur_column == 257 and self.cur_scanline >= 0) {
+            // Reset scanline sprite memory
+            @memset(self.getOAMSlice(&self.scanline_sprites), 0xFF);
+            self.sprites_count = 0;
+
+            // Find first 8 sprites that intersect scanline, we check for one extra sprite in order to set the sprite overflow flag
+            var oam_entries_scanned: u8 = 0;
+            while (oam_entries_scanned < 64 and self.sprites_count < self.scanline_sprites.len + 1) : (oam_entries_scanned += 1) {
+                const y_diff = @as(i16, @intCast(self.cur_scanline)) - @as(i16, @intCast(self.object_attribute_memory[oam_entries_scanned].y));
+                // If difference is between 0 and sprite height, we have a hit
+                if (y_diff >= 0 and y_diff < @as(u8, if (self.ppu_control & PPUCTRL.sprite_size.get() != 0) 16 else 8)) {
+                    if (self.sprites_count < 8) {
+                        self.scanline_sprites[self.sprites_count] = self.object_attribute_memory[oam_entries_scanned];
+                        self.sprites_count += 1;
+                    }
+                }
+            }
+            // Set sprite overflow
+            self.ppu_status = (self.ppu_status & ~PPUSTAT.get(.sprite_overflow)) | (if (self.sprites_count > 8) @as(u8, 1) << 5 else 0);
+        }
+
+        // Populate sprite shifters
+        // TODO: ALL OF THE SPRITE THINGS ARE SUPREMELY BROKEN
+        if (self.cur_column == 340 and self.cur_scanline >= 0) {
+            const scanline: u16 = @intCast(self.cur_scanline);
+            var sprite_ptrn_addr_lsb: u16 = 0;
+            var sprite_ptrn_addr_msb: u16 = 0;
+            for (0..self.sprites_count) |i| {
+                // 8x8 sprite mode
+                if (self.ppu_control & PPUCTRL.sprite_size.get() == 0) {
+                    // Check if sprite is flipped vertically
+                    if (self.scanline_sprites[i].attr & 0x80 == 0) {
+                        sprite_ptrn_addr_lsb = (@as(u16, self.ppu_control & PPUCTRL.sprite_ptrn_tbl_base.get()) << 12) | self.scanline_sprites[i].id << 4 | (scanline - self.scanline_sprites[i].y);
+                    } else {
+                        sprite_ptrn_addr_lsb = (@as(u16, self.ppu_control & PPUCTRL.sprite_ptrn_tbl_base.get()) << 12) | self.scanline_sprites[i].id << 4 | (7 - (scanline - self.scanline_sprites[i].y));
+                    }
+                // 8x16 sprite mode
+                } else {
+                    // Check if sprite is flipped vertically
+                    if (self.scanline_sprites[i].attr & 0x80 == 0) {
+                        // Determine which half of sprite
+                        if (scanline - self.scanline_sprites[i].y < 8) {
+                            // Read top half of tile,
+                            // lsb of tile id is the pattern table
+                            sprite_ptrn_addr_lsb = (@as(u16, self.scanline_sprites[i].id & 0x01) << 12) | (@as(u16, self.scanline_sprites[i].id & 0xFE) << 4) | ((scanline - self.scanline_sprites[i].y) & 0x07);
+                        } else {
+                            // Read bottom half of tile
+                            sprite_ptrn_addr_lsb = (@as(u16, self.scanline_sprites[i].id & 0x01) << 12) | (@as(u16, (self.scanline_sprites[i].id & 0xFE) + 1) << 4) | ((scanline - self.scanline_sprites[i].y) & 0x07);
+                        }
+                    } else {
+                        if (scanline - self.scanline_sprites[i].y < 8) {
+                            // Read top half of tile
+                            sprite_ptrn_addr_lsb = (@as(u16, self.scanline_sprites[i].id & 0x01) << 12) | (@as(u16, (self.scanline_sprites[i].id & 0xFE) + 1) << 4) | (7 - (scanline - self.scanline_sprites[i].y) & 0x07);
+                        } else {
+                            // Read bottom half of tile
+                            sprite_ptrn_addr_lsb = (@as(u16, self.scanline_sprites[i].id & 0x01) << 12) | (@as(u16, self.scanline_sprites[i].id & 0xFE) << 4) | (7 - (scanline - self.scanline_sprites[i].y) & 0x07);
+                        }
+                    }
+                }
+                sprite_ptrn_addr_msb = sprite_ptrn_addr_lsb + 8;
+                var sprite_bits_lsb = self.memory_read(sprite_ptrn_addr_lsb);
+                var sprite_bits_msb = self.memory_read(sprite_ptrn_addr_msb);
+
+                // Flipping sprite horizontally
+                if (self.scanline_sprites[i].attr & 0x40 != 0) {
+                    sprite_bits_lsb = @bitReverse(sprite_bits_lsb);
+                    sprite_bits_msb = @bitReverse(sprite_bits_msb);
+                }
+
+                // Insert into shift registers
+                self.sprite_shifter_ptrn_lsb[i] = sprite_bits_lsb;
+                self.sprite_shifter_ptrn_msb[i] = sprite_bits_msb;
+            }
+        }
+
+        var sprite_pixel: u8 = 0;  // 2 bit color
+        var sprite_palette: u8 = 0;  // 3 bit palette
+        var sprite_priority: u8 = 0;
+        if (self.ppu_mask & PPUMASK.enable_sprites.get() != 0) {
+            for (0..self.sprites_count) |i| {
+                if (self.scanline_sprites[i].x == 0) {
+                    const sprite_pixel_lsb: u8 = @intFromBool((self.sprite_shifter_ptrn_lsb[i] & 0x80) > 0);
+                    const sprite_pixel_msb: u8 = @intFromBool((self.sprite_shifter_ptrn_msb[i] & 0x80) > 0);
+
+                    sprite_pixel = (sprite_pixel_msb << 1) | sprite_pixel_lsb;
+                    sprite_palette = (self.scanline_sprites[i].attr & 0x03) + 0x04;
+                    sprite_priority = @intFromBool((self.scanline_sprites[i].attr & 0x20) == 0);
+
+                    // If pixel is not transparent
+                    if (sprite_pixel != 0) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Logic for choosing final pixel value
+        var final_pixel: u8 = 0;
+        var final_palette: u8 = 0;
+        if (background_pixel == 0 and sprite_pixel == 0) {
+            // Fully transparent pixel
+            // No need to do anything
+        } else if (background_pixel == 0 and sprite_pixel > 0) {
+            final_pixel = sprite_pixel;
+            final_palette = sprite_palette;
+        } else if (background_pixel > 0 and sprite_pixel == 0) {
+            final_pixel = background_pixel;
+            final_palette = background_palette;
+        } else if (background_pixel > 0 and sprite_pixel > 0) {
+            if (sprite_priority != 0) {
+                final_pixel = sprite_pixel;
+                final_palette = sprite_palette;
+            } else {
+                final_pixel = background_pixel;
+                final_palette = background_palette;
+            }
+        }
+
         if (self.cur_scanline >= 0 and self.cur_column < frame_buffer_width) {
             const scanline: u16 = @intCast(self.cur_scanline);
             self.frame_buffer[scanline * frame_buffer_width + self.cur_column] = std.mem.nativeToLittle(
                 u32,
-                getNtscPaletteColor(self.memory_read(@as(u16, 0x3F00) + (palette << 2) + pixel)),
+                getNtscPaletteColor(self.memory_read(@as(u16, 0x3F00) + (final_palette << 2) + final_pixel)),
             );
         }
     }
@@ -234,6 +397,17 @@ fn updateShifters(self: *Self) void {
         self.shifter_ptrn_msb <<= 1;
         self.shifter_attr_lsb <<= 1;
         self.shifter_attr_msb <<= 1;
+    }
+
+    if (self.ppu_mask & PPUMASK.enable_sprites.get() != 0 and self.cur_column >= 1 and self.cur_column < 258) {
+        for (0..self.sprites_count) |i| {
+            if (self.scanline_sprites[i].x > 0) {
+                self.scanline_sprites[i].x -= 1;
+            } else {
+                self.sprite_shifter_ptrn_lsb[i] <<= 1;
+                self.sprite_shifter_ptrn_msb[i] <<= 1;
+            }
+        }
     }
 }
 
@@ -365,64 +539,80 @@ pub fn getFieldFromAddr(self: *Self, address: u16) ?*u8 {
 }
 
 // Address given in CPU space
+// System reference is needed to set DMA status
 pub fn ppu_write(self: *Self, data: u8, address: u16) void {
-    switch (address - 0x2000) {
-        // PPU Control
-        0 => {
-            self.ppu_control = data;
-            // Set the loopy nametable select
-            self.tram_addr.setVal(.nametable_select, @intCast(self.ppu_control & (PPUCTRL.base_name_tbl_h.get() | PPUCTRL.base_name_tbl_l.get())));
-        },
-        // PPU Mask
-        1 => {
-            self.ppu_mask = data;
-        },
-        2 => {},
-        3 => {},
-        4 => {},
-        // Scroll register
-        5 => {
-            if (self.address_latch == 0) {
-                self.fine_x = data & 0x07;
-                self.tram_addr.setVal(.coarse_x_scroll, @intCast(data >> 3));
-                self.address_latch = 1;
-            } else {
-                self.tram_addr.setVal(.fine_y_scroll, @intCast(data & 0x07));
-                self.tram_addr.setVal(.coarse_y_scroll, @intCast(data >> 3));
-                self.address_latch = 0;
-            }
-        },
-        // PPU Address
-        6 => {
-            if (self.address_latch == 0) {
-                // Set high byte of address
-                self.tram_addr.set(self.tram_addr.get() & 0x00FF | (@as(u16, data) << 8));
-                self.address_latch = 1;
-            } else {
-                // Set low byte of address
-                self.tram_addr.set(self.tram_addr.get() & 0xFF00 | data);
-                self.ppu_addr = self.tram_addr;
-                self.address_latch = 0;
-            }
-        },
-        // PPU Data
-        7 => {
-            self.ppu_data = data;
-            self.memory_write(self.ppu_addr.get(), self.ppu_data);
-            // NES autoincrements the address
-            self.ppu_addr.set(self.ppu_addr.get() + @as(u16, if (self.ppu_control & PPUCTRL.get(.vram_addr_increment) == 0) 1 else 32));
-        },
-        else => @panic("Unknown ppu write!"),
+    // DMA write
+    if (address == 0x4014) {
+        self.dma_write_requested = true;
+        self.dma_page = data;
+    } else {
+        switch (address - 0x2000) {
+            // PPU Control
+            0 => {
+                self.ppu_control = data;
+                // Set the loopy nametable select
+                self.tram_addr.setVal(.nametable_select, @intCast(self.ppu_control & (PPUCTRL.base_name_tbl_h.get() | PPUCTRL.base_name_tbl_l.get())));
+            },
+            // PPU Mask
+            1 => {
+                self.ppu_mask = data;
+            },
+            2 => {},
+            // OAM Address
+            3 => {
+                self.oam_addr = data;
+            },
+            // OAM Data
+            4 => {
+                self.getOAMSlice(&self.object_attribute_memory)[self.oam_addr] = data;
+                self.oam_addr += 1;
+            },
+            // Scroll register
+            5 => {
+                if (self.address_latch == 0) {
+                    self.fine_x = data & 0x07;
+                    self.tram_addr.setVal(.coarse_x_scroll, @intCast(data >> 3));
+                    self.address_latch = 1;
+                } else {
+                    self.tram_addr.setVal(.fine_y_scroll, @intCast(data & 0x07));
+                    self.tram_addr.setVal(.coarse_y_scroll, @intCast(data >> 3));
+                    self.address_latch = 0;
+                }
+            },
+            // PPU Address
+            6 => {
+                if (self.address_latch == 0) {
+                    // Set high byte of address
+                    self.tram_addr.set(self.tram_addr.get() & 0x00FF | (@as(u16, data) << 8));
+                    self.address_latch = 1;
+                } else {
+                    // Set low byte of address
+                    self.tram_addr.set(self.tram_addr.get() & 0xFF00 | data);
+                    self.ppu_addr = self.tram_addr;
+                    self.address_latch = 0;
+                }
+            },
+            // PPU Data
+            7 => {
+                self.memory_write(self.ppu_addr.get(), data);
+                // NES autoincrements the address
+                self.ppu_addr.set(self.ppu_addr.get() + @as(u16, if (self.ppu_control & PPUCTRL.get(.vram_addr_increment) == 0) 1 else 32));
+            },
+            else => @panic("Unknown ppu write!"),
+        }
     }
 }
 
 // Address given in CPU space
 pub fn ppu_read(self: *Self, address: u16, comptime debug_read: bool) u8 {
-    var data = self.getFieldFromAddr(address).?.*;
+    var data: u8 = 0;
 
     // Certain PPU reads change its state
     if (!debug_read) {
         switch (address - 0x2000) {
+            // PPU Control
+            0 => data = 0,
+            1 => data = 0,
             // PPU Status
             2 => {
                 // First 3 bits are filled with status register, rest is sourced from data register
@@ -433,8 +623,15 @@ pub fn ppu_read(self: *Self, address: u16, comptime debug_read: bool) u8 {
                 // Reset vblank flag
                 self.ppu_status &= ~PPUSTAT.vblank.get();
             },
+            // OAM Address
+            3 => data = 0,
+            // OAM Data
+            4 => {
+                data = self.getOAMSlice(&self.object_attribute_memory)[self.oam_addr];
+            },
+            5 => data = 0,
             // PPU Address
-            6 => {},
+            6 => data = 0,
             // PPU Data
             7 => {
                 // There is a 1 cycle read delay from the ppu
@@ -447,13 +644,16 @@ pub fn ppu_read(self: *Self, address: u16, comptime debug_read: bool) u8 {
                 // NES autoincrements the address
                 self.ppu_addr.set(self.ppu_addr.get() + @as(u16, if (self.ppu_control & PPUCTRL.get(.vram_addr_increment) == 0) 1 else 32));
             },
-            else => {@panic("Unknown field!");},
+            else => |i| {
+                std.debug.print("value: {}\n", .{i});
+                @panic("Unknown field!");
+            },
         }
     }
     return data;
 }
 
-fn memory_read(self: *Self, address: u16) u8 {
+pub fn memory_read(self: *Self, address: u16) u8 {
     // Top 2 bits are not used
     var addr = address & 0x3FFF;
 
@@ -491,7 +691,7 @@ fn memory_read(self: *Self, address: u16) u8 {
     return 0;
 }
 
-fn memory_write(self: *Self, address: u16, data: u8) void {
+pub fn memory_write(self: *Self, address: u16, data: u8) void {
     // Top 2 bits are not used
     var addr = address & 0x3FFF;
 
@@ -611,4 +811,12 @@ test "Loopy enum set" {
     // Testing flipping 10th bit
     l.set((~l.get() & 0x0400) | (l.get() & ~@as(u16, 0x0400)));
     try std.testing.expectEqual(0xFBF4, l.get());
+}
+
+test "OAM Slice access" {
+    var t = Self.init();
+    t.object_attribute_memory[1].y = 29;
+    t.object_attribute_memory[2].x = 89;
+    try std.testing.expectEqual(29, t.getOAMSlice(&t.object_attribute_memory)[4]);
+    try std.testing.expectEqual(89, t.getOAMSlice(&t.object_attribute_memory)[11]);
 }

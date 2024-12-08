@@ -24,6 +24,14 @@ pub const NesSystem = struct {
 
     running: bool = false,  // Determines if cpu should run
 
+    // DMA control vars
+    // Final address is dma_page << 8 | dma_addr
+    dma_page: u8 = 0,
+    dma_addr: u8 = 0,
+    dma_data: u8 = 0,
+    dma_active: bool = false,
+    dma_dummy_cycle: bool = true,  // Used to align read cycle
+
     pub fn init(alloc: std.mem.Allocator) !Self {
         const heap_bus = try alloc.create(NesBus);
 
@@ -71,18 +79,44 @@ pub const NesSystem = struct {
     // CPU is every 3 ticks
     pub fn tick(self: *Self) void {
         if (self.running) {
-            self.ppu.tick(&self.cpu);
+            self.ppu.tick(self);
             if (@mod(self.cycles_executed, 3) == 0) {
-                self.cpu.tick() catch {
-                    std.debug.print("Last Instruction was at address {X:0<4}\n", .{self.last_instr_address});
-                    @panic("Reached illegal instruction");
-                };
-                // Count instruction when on fetch cycle
-                if (self.cpu.current_instruction_cycle == 0) {
-                    self.instructions_executed +%= 1;
-                    self.last_instr_address = self.cpu.program_counter;
+                // A DMA transfer pauses cpu activity
+                // DMA transfer needs to be aligned to a
+                if (self.dma_active) {
+                    if (self.dma_dummy_cycle) {
+                        if (@mod(self.cycles_executed, 2) == 1) {
+                            // This means we are write aligned, start dma transfer
+                            self.dma_dummy_cycle = false;
+                        }
+                    } else {
+                        if (@mod(self.cycles_executed, 2) == 0) {
+                            // Read from cpu
+                            self.dma_data = self.cpu.safeBusRead(@as(u16, self.dma_page) << 8 | self.dma_addr);
+                        } else {
+                            // Write to ppu
+                            self.ppu.getOAMSlice(&self.ppu.object_attribute_memory)[self.dma_addr] = self.dma_data;
+                            // self.ppu.memory_write(@as(u16, 0x2003) + self.dma_addr, self.dma_data);
+                            self.dma_addr +%= 1;
+                            // If we have wrapped around, the DMA page transfer has completed
+                            if (self.dma_addr == 0) {
+                                self.dma_active = false;
+                                self.dma_dummy_cycle = true;
+                            }
+                        }
+                    }
+                } else {
+                    self.cpu.tick() catch {
+                        std.debug.print("Last Instruction was at address {X:0<4}\n", .{self.last_instr_address});
+                        @panic("Reached illegal instruction");
+                    };
+                    // Count instruction when on fetch cycle
+                    if (self.cpu.current_instruction_cycle == 0) {
+                        self.instructions_executed +%= 1;
+                        self.last_instr_address = self.cpu.program_counter;
+                    }
+                    self.cpu_cycles_executed +%= 1;
                 }
-                self.cpu_cycles_executed +%= 1;
             }
             self.cycles_executed +%= 1;
         }
@@ -100,6 +134,13 @@ pub const NesSystem = struct {
                 self.tick();
             }
         }
+    }
+
+    // Stops CPU cycles and sets PPU to read from given page
+    pub fn startDMA(self: *Self, page: u8) void {
+        self.dma_page = page;
+        self.dma_active = true;
+        self.dma_addr = 0;
     }
 };
 
@@ -166,11 +207,15 @@ pub const NesBus = Bus.Bus(struct {
         pub fn onReadConst(_: Self, _: u16, _: anytype) u8 {
             return 0;
         }
-        pub fn onWrite(self: *Self, address: u16, data: u8, _: anytype) void {
+        pub fn onWrite(self: *Self, address: u16, data: u8, bus: anytype) void {
             // Controller 1 line
             if (address == 0x4016) {
                 // Reset controller read when bit 0 is high
                 if (data & 1 != 0) self.controller_register_num = 0;
+            }
+            // DMA register
+            if (address == 0x4014) {
+                bus.@"2000-3FFF".ppu.ppu_write(data, address);
             }
         }
     },
