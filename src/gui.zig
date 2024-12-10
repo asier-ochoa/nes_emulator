@@ -70,7 +70,9 @@ pub const GuiState = struct {
     // If it's null no window is being dragged
     currently_dragged_window: ?MenuBarItem = null,
     currently_dragged_mouse_offset: rl.Vector2 = .{.x = 0, .y = 0},  // Offset from anchor point to window anchor
-    
+
+    game_fullscreen: bool = false,
+
     file: @import("windows/file.zig") = .{},
     cpu_status: @import("windows/cpu_status.zig") = .{},
     debugger: @import("windows/debugger.zig"),

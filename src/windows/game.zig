@@ -51,7 +51,7 @@ pub fn draw(self: *@This(), sys: *const util.NesSystem) void {
     }
 }
 
-fn updateCpuFramebuffer(src: []const u32, dest: []u32) void {
+pub fn updateCpuFramebuffer(src: []const u32, dest: []u32) void {
     for (src, 0..) |s, i| {
         dest[i] = std.mem.bigToNative(u32, s);
     }

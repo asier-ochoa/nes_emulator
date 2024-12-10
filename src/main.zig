@@ -43,6 +43,7 @@ pub fn main() !void {
     while (!rl.windowShouldClose()) {
         // Update system state
         sys.running = state.cpu_status.cpu_running;
+        if (rl.isKeyPressed(.key_f)) state.game_fullscreen = !state.game_fullscreen;
 
         // Run CPU
         sys.runAt(1_789_773 * 3) catch {
@@ -58,7 +59,7 @@ pub fn main() !void {
         {  // Frame drawing scope
             rl.beginDrawing();
             defer rl.endDrawing();
-            rl.clearBackground(rl.Color.dark_blue);
+            rl.clearBackground(if (!state.game_fullscreen) rl.Color.dark_blue else rl.Color.black);
 
             // Draw perf counters
             @memset(&text_buffer, 0);
@@ -66,12 +67,24 @@ pub fn main() !void {
             @memset(&text_buffer, 0);
             rl.drawText(@ptrCast(try std.fmt.bufPrint(&text_buffer, "CPU: {} hz", .{cpu_freq})), 0, 85, 20, rl.Color.black);
             {  // Ui Drawing scope
-                gui.menuBar(&state);
-                state.ptrn_tbl.draw(&gui.window_bounds.ptrn_tbl, &sys);
-                state.debugger.draw(&state.cpu_status, &sys, alloc);
-                state.cpu_status.draw(&sys, sys.cpu_cycles_executed, sys.instructions_executed);
-                state.file.draw(&sys, &state.debugger);
-                state.game.draw(&sys);
+                if (!state.game_fullscreen) {
+                    gui.menuBar(&state);
+                    state.ptrn_tbl.draw(&gui.window_bounds.ptrn_tbl, &sys);
+                    state.debugger.draw(&state.cpu_status, &sys, alloc);
+                    state.cpu_status.draw(&sys, sys.cpu_cycles_executed, sys.instructions_executed);
+                    state.file.draw(&sys, &state.debugger);
+                    state.game.draw(&sys);
+                } else {
+                    @TypeOf(state.game).updateCpuFramebuffer(&sys.ppu.frame_buffer, state.game.getRawFramebuffer());
+                    rl.updateTexture(state.game.fb_texture, state.game.framebuffer.data);
+                    rl.drawTextureEx(
+                        state.game.fb_texture,
+                        .{.x = 0, .y = 0},
+                        0,
+                        @as(f32, @floatFromInt(rl.getScreenHeight())) / @as(f32, @floatFromInt(state.game.fb_texture.height)),
+                        rl.Color.white,
+                    );
+                }
             }
         }
 

@@ -15,6 +15,11 @@ status_text_buffer: [512]u8 = .{0} ** 512,
 
 pub fn draw(self: *@This(), sys: *util.NesSystem, debug_state: *debugger) void {
     const anchor = self.window_pos;
+    // Ignore dropped files if gui is not open
+    if (rl.isFileDropped() and !self.window_active) {
+        const files = rl.loadDroppedFiles();
+        defer rl.unloadDroppedFiles(files);
+    }
     if (self.window_active) {
         if (rg.guiWindowBox(.{
             .x = anchor.x, .y = anchor.y,
@@ -35,6 +40,20 @@ pub fn draw(self: *@This(), sys: *util.NesSystem, debug_state: *debugger) void {
                 defer nfd.freePath(@ptrCast(f));
                 std.debug.print("Attempting to open rom: {s}\n", .{f});
                 open_rom_file(f, sys, &debug_state.dissasembly_regen) catch |e| {
+                    switch (e) {
+                        inline else => |err| std.mem.copyForwards(u8, &self.status_text_buffer, "Error: " ++ @errorName(err)),
+                    }
+                };
+            }
+        }
+
+        if (rl.isFileDropped()) {
+            const files = rl.loadDroppedFiles();
+            defer rl.unloadDroppedFiles(files);
+            if (files.count > 0) {
+                std.debug.print("Attempting to open rom: {s}\n", .{files.paths[0]});
+                const path_len = std.mem.len(files.paths[0]);
+                open_rom_file(files.paths[0][0..path_len], sys, &debug_state.dissasembly_regen) catch |e| {
                     switch (e) {
                         inline else => |err| std.mem.copyForwards(u8, &self.status_text_buffer, "Error: " ++ @errorName(err)),
                     }
