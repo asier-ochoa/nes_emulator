@@ -1,12 +1,26 @@
 const std = @import("std");
 const util = @import("util.zig");
 
+pub const INesError = error {
+    UnsupportedMapper,
+    MissingINesHeader,
+    FileBufferOverflow,
+};
+
 // Loads INES files into bus by copying according to mapper data.
-pub fn load_ines_into_bus(data: []const u8, sys: *util.NesSystem) void {
+pub fn load_ines_into_bus(data: []const u8, sys: *util.NesSystem) !void {
     const header = data[0..16];
+    if (!std.mem.eql(u8, header[0..4], &.{0x4E, 0x45, 0x53, 0x1A})) {
+        return INesError.MissingINesHeader;
+    }
+    const mapper = header[6] >> 4;
+    if (mapper != 0) {
+        return INesError.UnsupportedMapper;
+    }
+
     const prg_size = @as(u32, header[4]) * 16384;
     const chr_size = @as(u32, header[5]) * 8192;
-    const mapper = header[6] >> 4;
+
 
     std.debug.print(
         \\INES file stats:

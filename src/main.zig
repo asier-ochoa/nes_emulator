@@ -39,27 +39,15 @@ pub fn main() !void {
     var last_cycle_count: u64 = 0;
     var last_cpu_cycle_count: u64 = 0;
 
-    // Initialize debugger but don't attach
-    // var debugger = debug.Debugger.init(alloc);
-
-    // TODO: Replace with proper rom loading method controlled by gui
-    // Load nestest
-    const file = try std.fs.cwd().openFile("./../src/resources/nestest.nes", .{});
-    defer file.close();
-    const file_data = try alloc.alloc(u8, (try file.metadata()).size());
-    defer _ = alloc.free(file_data);
-    _ = try file.readAll(file_data);
-    rom_loader.load_ines_into_bus(file_data, &sys);
-
     var text_buffer: [256]u8 = .{0} ** 256;
     while (!rl.windowShouldClose()) {
         // Update system state
         sys.running = state.cpu_status.cpu_running;
 
         // Run CPU
-        sys.runAt(1_789_773 * 3);
-        // sys.runFullSpeedFor(std.time.milliTimestamp(), @intFromFloat(rl.getFrameTime() * 0.90 * 1000));
-        // sys.runAt(50000);
+        sys.runAt(1_789_773 * 3) catch {
+            state.cpu_status.cpu_running = false;
+        };
 
         // Compute emulator frequency
         const freq = (sys.cycles_executed - last_cycle_count) * @as(u32, @intCast(rl.getFPS()));
@@ -82,6 +70,7 @@ pub fn main() !void {
                 state.ptrn_tbl.draw(&gui.window_bounds.ptrn_tbl, &sys);
                 state.debugger.draw(&state.cpu_status, &sys, alloc);
                 state.cpu_status.draw(&sys, sys.cpu_cycles_executed, sys.instructions_executed);
+                state.file.draw(&sys, &state.debugger);
                 state.game.draw(&sys);
             }
         }

@@ -11,6 +11,7 @@ pub const input_buf_size = 128 + 1;
 // Order of fields determines order of dragging collision check. MAKE SURE ITS IN SYNC WITH DRAWING CODE
 pub const window_bounds = struct {
     pub const game: rl.Vector2 = .{.x = PPU.frame_buffer_width + 2, .y = PPU.frame_buffer_height + 24 + 1};
+    pub const file: rl.Vector2 = .{.x = 264, .y = 240};
     pub const cpu_status: rl.Vector2 = .{.y = 176, .x = 376};
     pub const debugger: rl.Vector2 = .{.x = 320, .y = 504};
     pub var ptrn_tbl: rl.Vector2 = @import("windows/ptrn_tbl.zig").bounds(.default);
@@ -55,7 +56,7 @@ pub fn windowDraggingLogic(state: *GuiState) void {
     // Dragging movement
     if (state.currently_dragged_window) |w| {
         switch (w) {
-            .none, .file, .memory => {},
+            .none, .memory => {},
             inline else => |t| {
                 const window_name = @tagName(t);
                 const window_pos = &@field(state, window_name).window_pos;
@@ -69,7 +70,8 @@ pub const GuiState = struct {
     // If it's null no window is being dragged
     currently_dragged_window: ?MenuBarItem = null,
     currently_dragged_mouse_offset: rl.Vector2 = .{.x = 0, .y = 0},  // Offset from anchor point to window anchor
-
+    
+    file: @import("windows/file.zig") = .{},
     cpu_status: @import("windows/cpu_status.zig") = .{},
     debugger: @import("windows/debugger.zig"),
     ptrn_tbl: @import("windows/ptrn_tbl.zig"),
@@ -107,10 +109,12 @@ pub fn menuBar(state: *GuiState) void {
         .width = @floatFromInt(rl.getRenderWidth()),
         .height = 64
     }, "");
-    _ = rg.guiButton(.{
+    if (rg.guiButton(.{
         .x = 8, .y = 8,
         .width = 88, .height = 48
-    }, "FILE");
+    }, if (state.file.window_active) "> FILE" else "FILE") > 0) {
+        state.file.window_active = !state.file.window_active;
+    }
     if (rg.guiButton(.{
         .x = 104, .y = 8,
         .width = 88, .height = 48

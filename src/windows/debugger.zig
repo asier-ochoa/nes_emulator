@@ -68,7 +68,9 @@ pub fn draw(self: *@This(), cpu_status_state: *@import("cpu_status.zig"), system
         }, "STEP INSTR") > 0) {
             cpu_status_state.registers_update_flag = true;
             system.running = true;
-            system.tickInstruction();
+            system.tickInstruction() catch {
+                cpu_status_state.cpu_running = false;
+            };
             system.running = false;
             // Scroll to PC + 8 line offset
             if (self.dissasembly_follow) {
@@ -85,7 +87,9 @@ pub fn draw(self: *@This(), cpu_status_state: *@import("cpu_status.zig"), system
         }, "STEP CYCLE") > 0) {
             cpu_status_state.registers_update_flag = true;
             system.running = true;
-            system.tick();
+            system.tick() catch {
+                cpu_status_state.cpu_running = false;
+            };
             system.running = false;
             // Scroll to PC + 8 line offset
             if (self.dissasembly_follow) {

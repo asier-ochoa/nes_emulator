@@ -79,7 +79,7 @@ pub fn CPU(Bus: type) type {
                 self.irq_latch = false;
             } else {
                 self.instruction_register = self.safeBusRead(self.program_counter);
-                self.program_counter += 1;
+                self.program_counter +%= 1;
             }
         }
 
@@ -360,9 +360,13 @@ pub fn CPU(Bus: type) type {
                             );
                             self.stack_pointer -%= 1;
                         },
-                        instr.JSRabs.op, instr.LDAindX.op, instr.STAindX.op,
-                        instr.ORAindX.op, instr.ANDindX.op, instr.EORindX.op,
-                        instr.ADCindX.op, instr.CMPindX.op, instr.SBCindX.op,
+                        instr.ADCindX.op, instr.CMPindX.op, instr.EORindX.op,
+                        instr.ANDindX.op, instr.LDAindX.op, instr.ORAindX.op,
+                        instr.SBCindX.op => {
+                            // Required dummy read
+                            _ = self.safeBusRead(self.data_latch);
+                        },
+                        instr.JSRabs.op, instr.STAindX.op,
                         instr.INCzpg.op, instr.DECzpg.op, instr.LDYzpgX.op,
                         instr.STYzpgX.op, instr.ORAzpgX.op, instr.EORzpgX.op,
                         instr.ADCzpgX.op, instr.CMPzpgX.op, instr.STAzpgX.op,

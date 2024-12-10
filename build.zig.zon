@@ -2,12 +2,14 @@
     .version = "0.0.1",
     .name = "nes_emulator",
     .dependencies = .{
+        .nfd = .{
+            .url = "https://github.com/fabioarnold/nfd-zig/archive/ad81729d33da30d5f4fd23718debec48245121ca.zip",
+            .hash = "1220a679380847513262c8c5c474d4a415f9ecc4921c8c6aefbdbdce66cf2aa19ceb",
+        },
         .raylib = .{
-            .url = "https://github.com/Not-Nik/raylib-zig/archive/devel.tar.gz",
-            .hash = "12202f8c415153088be8df39a51e0a4c9d402afd403422a0dcc9afdd417e437a6fdb"
-        }
+            .url = "https://github.com/Not-Nik/raylib-zig/archive/refs/tags/v5.5-dev.zip",
+            .hash = "122062d2421175ba6bf89382c86621270e4883f1074ee4cc09da282e231bdef57328",
+        },
     },
-    .paths = .{
-        "src"
-    }
+    .paths = .{"src"},
 }

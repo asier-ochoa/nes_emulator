@@ -2,7 +2,8 @@ const std = @import("std");
 const Bus = @import("bus.zig");
 const CPU = @import("6502.zig");
 const debug = @import("debugger.zig");
-const rl = @import("raylib");
+const builtin = @import("builtin");
+const rl = if (!builtin.is_test) @import("raylib") else struct {};
 const PPU = @import("ppu.zig");
 
 pub const NesCpu = CPU.CPU(NesBus);
@@ -44,7 +45,7 @@ pub const NesSystem = struct {
         };
 
         // Set ram to 0
-        @memset(&ret.bus.memory_map.@"0000-07FF", 0);
+        @memset(&ret.bus.memory_map.@"0000-07FF", 0x00);
         return ret;
     }
 
@@ -54,22 +55,22 @@ pub const NesSystem = struct {
 
     // Executes system cycles for a certain amount of millisenconds since frame start
     // All time values must be given in millis
-    pub fn runFullSpeedFor(self: *Self, start_time: i64, time: i64) void {
+    pub fn runFullSpeedFor(self: *Self, start_time: i64, time: i64) !void {
         const end_time = start_time + time;
         while (std.time.milliTimestamp() < end_time) {
-            self.tick();
+            try self.tick();
         }
     }
 
     // Executes system cycles at a certain frequency in hz
     // Minimum tick rate will always be tied to framerate
-    pub fn runAt(self: *Self, freq: i64) void {
+    pub fn runAt(self: *Self, freq: i64) !void {
         const fps = rl.getFPS();
         if (fps > 0) {
             var cycles_per_frame = @divTrunc(freq, rl.getFPS());
             cycles_per_frame += if (cycles_per_frame == 0) 1 else 0;
             for (0..@intCast(cycles_per_frame)) |_| {
-                self.tick();
+                try self.tick();
             }
         }
     }
@@ -77,7 +78,7 @@ pub const NesSystem = struct {
     // Tick a single clock cycle
     // PPU is base clock
     // CPU is every 3 ticks
-    pub fn tick(self: *Self) void {
+    pub fn tick(self: *Self) !void {
         if (self.running) {
             self.ppu.tick(self);
             if (@mod(self.cycles_executed, 3) == 0) {
@@ -106,9 +107,10 @@ pub const NesSystem = struct {
                         }
                     }
                 } else {
-                    self.cpu.tick() catch {
+                    self.cpu.tick() catch |e| {
+                        std.debug.print("----- ILLEGAL INSTRUCTION -----\n", .{});
                         std.debug.print("Last Instruction was at address {X:0<4}\n", .{self.last_instr_address});
-                        @panic("Reached illegal instruction");
+                        return e;
                     };
                     // Count instruction when on fetch cycle
                     if (self.cpu.current_instruction_cycle == 0) {
@@ -122,16 +124,16 @@ pub const NesSystem = struct {
         }
     }
 
-    pub fn tickInstruction(self: *Self) void {
+    pub fn tickInstruction(self: *Self) !void {
         if (self.running) {
             if (self.cpu.current_instruction_cycle == 0) {
                 const start_cpu_cycle = self.cpu_cycles_executed;
                 while (self.cpu_cycles_executed == start_cpu_cycle) {
-                    self.tick();
+                    try self.tick();
                 }
             }
             while (self.cpu.current_instruction_cycle != 0) {
-                self.tick();
+                try self.tick();
             }
         }
     }
@@ -186,21 +188,23 @@ pub const NesBus = Bus.Bus(struct {
         controller_register_num: u8 = 0,  // Used to cycle which button to report back
         pub fn onRead(self: *Self, address: u16, _: anytype) u8 {
             // Controller 1 line
-            if (address == 0x4016) {
-                const ret: u8 = switch (self.controller_register_num) {
-                    // NES A button
-                    0 => if (rl.isKeyDown(.key_q)) 1 else 0,
-                    1 => if (rl.isKeyDown(.key_w)) 1 else 0,
-                    2 => if (rl.isKeyDown(.key_backslash)) 1 else 0,
-                    3 => if (rl.isKeyDown(.key_enter)) 1 else 0,
-                    4 => if (rl.isKeyDown(.key_up)) 1 else 0,
-                    5 => if (rl.isKeyDown(.key_down)) 1 else 0,
-                    6 => if (rl.isKeyDown(.key_left)) 1 else 0,
-                    7 => if (rl.isKeyDown(.key_right)) 1 else 0,
-                    else => 1,
-                };
-                self.controller_register_num +|= 1;
-                return ret;
+            if (!builtin.is_test) {
+                if (address == 0x4016) {
+                    const ret: u8 = switch (self.controller_register_num) {
+                        // NES A button
+                        0 => if (rl.isKeyDown(.key_q)) 1 else 0,
+                        1 => if (rl.isKeyDown(.key_w)) 1 else 0,
+                        2 => if (rl.isKeyDown(.key_backslash)) 1 else 0,
+                        3 => if (rl.isKeyDown(.key_enter)) 1 else 0,
+                        4 => if (rl.isKeyDown(.key_up)) 1 else 0,
+                        5 => if (rl.isKeyDown(.key_down)) 1 else 0,
+                        6 => if (rl.isKeyDown(.key_left)) 1 else 0,
+                        7 => if (rl.isKeyDown(.key_right)) 1 else 0,
+                        else => 1,
+                    };
+                    self.controller_register_num +|= 1;
+                    return ret;
+                }
             }
             return 0;
         }

@@ -565,7 +565,7 @@ pub fn ppu_write(self: *Self, data: u8, address: u16) void {
             // OAM Data
             4 => {
                 self.getOAMSlice(&self.object_attribute_memory)[self.oam_addr] = data;
-                self.oam_addr += 1;
+                self.oam_addr +%= 1;
             },
             // Scroll register
             5 => {

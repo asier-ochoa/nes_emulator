@@ -31,6 +31,11 @@ pub fn build(b: *std.Build) void {
     emulator_exe.root_module.addImport("raylib", raylib);
     emulator_exe.root_module.addImport("raygui", raygui);
 
+    // Native file dialog dependency
+    const nfd = b.dependency("nfd", .{});
+    const nfd_mod = nfd.module("nfd");
+    emulator_exe.root_module.addImport("nfd", nfd_mod);
+
     // Build script steps
     const run_artifact = b.addRunArtifact(emulator_exe);
     run_artifact.cwd = b.path("./zig-out/");
