@@ -1,11 +1,12 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
     // Main program
     const emulator_exe = b.addExecutable(.{
         .name = "nes_emulator",
         .root_source_file = b.path("src/main.zig"),
-        .target = b.host,
+        .target = target,
         .optimize = b.standardOptimizeOption(.{}),
     });
     const install_exe = b.addInstallArtifact(emulator_exe, .{
@@ -19,8 +20,8 @@ pub fn build(b: *std.Build) void {
     
     // Declare raylib
     const raylib_dep = b.dependency("raylib", .{
-        .target = b.host,
-        .optimize = .ReleaseFast,
+        .target = target,
+        .optimize = .ReleaseFast
     });
     const raylib = raylib_dep.module("raylib");
     const raygui = raylib_dep.module("raygui");
@@ -32,7 +33,10 @@ pub fn build(b: *std.Build) void {
     emulator_exe.root_module.addImport("raygui", raygui);
 
     // Native file dialog dependency
-    const nfd = b.dependency("nfd", .{});
+    const nfd = b.dependency("nfd", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
     const nfd_mod = nfd.module("nfd");
     emulator_exe.root_module.addImport("nfd", nfd_mod);
 
