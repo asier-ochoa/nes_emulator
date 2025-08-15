@@ -7,3 +7,6 @@ git clone https://github.com/asier-ochoa/nes_emulator
 cd nes_emulator
 zig build run --release=safe
 ```
+---
+This project was created for my COMP492 capstone course. Here is the related poster:
+![img](Ochoa_CompSci_Poster.png)
